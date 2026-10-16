@@ -1,0 +1,8 @@
+{
+  "_note": "Demo profiles for development. topic_prefs maps topic_id to \"never\" or \"warn\"; topics not listed are fine.",
+  "users": [
+    {"user_id": "arachno", "name": "Alex", "topic_prefs": {"1": "never", "6": "warn"}},
+    {"user_id": "dog_lover", "name": "Sam", "topic_prefs": {"2": "never", "7": "warn"}},
+    {"user_id": "fresh", "name": "Jordan", "topic_prefs": {}}
+  ]
+}

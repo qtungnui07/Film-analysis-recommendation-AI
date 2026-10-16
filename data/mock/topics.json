@@ -1,0 +1,25 @@
+{
+  "_note": "Mock DTDD-style topics for development. Ids are made up; the data lead replaces them with the real DTDD topic list.",
+  "topics": [
+    {"topic_id": 1, "name": "spiders", "category": "Animals",
+     "synonyms": ["spider", "spiders", "arachnid", "arachnids", "arachnophobia", "tarantula", "tarantulas", "eight legs", "cobweb", "cobwebs"]},
+    {"topic_id": 2, "name": "a dog dies", "category": "Animals",
+     "synonyms": ["dog dies", "dog death", "dog dying", "dead dog", "dogs die", "puppy dies", "dog gets killed"]},
+    {"topic_id": 3, "name": "snakes", "category": "Animals",
+     "synonyms": ["snake", "snakes", "serpent", "serpents", "ophidiophobia", "cobra", "python", "viper"]},
+    {"topic_id": 4, "name": "needles", "category": "Medical",
+     "synonyms": ["needle", "needles", "injection", "injections", "syringe", "syringes", "trypanophobia", "shots at the doctor", "getting a shot", "iv drip"]},
+    {"topic_id": 5, "name": "clowns", "category": "Creatures",
+     "synonyms": ["clown", "clowns", "coulrophobia"]},
+    {"topic_id": 6, "name": "jump scares", "category": "Scary",
+     "synonyms": ["jump scare", "jump scares", "jumpscare", "jumpscares", "sudden scare", "sudden scares", "startle"]},
+    {"topic_id": 7, "name": "blood and gore", "category": "Violence",
+     "synonyms": ["blood", "bloody", "gore", "gory", "hemophobia", "guts"]},
+    {"topic_id": 8, "name": "drowning", "category": "Death",
+     "synonyms": ["drown", "drowning", "drowns", "drowned", "underwater"]},
+    {"topic_id": 9, "name": "claustrophobic scenes", "category": "Spaces",
+     "synonyms": ["claustrophobia", "claustrophobic", "enclosed space", "enclosed spaces", "tight spaces", "buried alive", "being trapped"]},
+    {"topic_id": 10, "name": "vomiting", "category": "Body",
+     "synonyms": ["vomit", "vomiting", "throwing up", "throw up", "puking", "emetophobia"]}
+  ]
+}
