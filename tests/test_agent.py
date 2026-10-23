@@ -169,7 +169,64 @@ def test_history_persists_across_turns(backend):
 
 def test_tool_specs_are_small_model_friendly():
     names = [spec["function"]["name"] for spec in TOOL_SPECS]
-    assert names == ["get_user_profile", "map_phrase_to_topics", "search_movies", "get_movie_warnings"]
+    assert names == [
+        "get_user_profile",
+        "request_profile_update",
+        "confirm_profile_update",
+        "map_phrase_to_topics",
+        "search_movies",
+        "get_movie_warnings",
+    ]
+
+
+def test_profile_update_requires_confirmation_in_a_later_turn(backend):
+    llm = FakeLLM(
+        completion(tool_calls=[call("request_profile_update", {"topic_id": SPIDERS, "strictness": "never"})]),
+        completion("Bạn muốn tôi lưu thay đổi này không?"),
+        completion("Đã lưu sở thích của bạn."),
+    )
+    agent = make_agent(backend, llm, user_id="fresh")
+
+    agent.run_turn("Tôi muốn tránh nhện")
+    assert backend.get_user_profile("fresh").topic_prefs == []
+    result = agent.run_turn("xác nhận")
+
+    assert result.trace[0].name == "confirm_profile_update"
+    assert backend.get_user_profile("fresh").topic_ids("never") == {SPIDERS}
+
+
+def test_model_cannot_confirm_profile_change_in_the_same_turn(backend):
+    llm = FakeLLM(
+        completion(
+            tool_calls=[
+                call("request_profile_update", {"topic_id": SPIDERS, "strictness": "never"}),
+                call("confirm_profile_update", {"proposal_id": "profile-change-1"}),
+            ]
+        ),
+        completion("Please confirm the change first."),
+    )
+    result = make_agent(backend, llm, user_id="fresh").run_turn("Set spiders to never")
+
+    assert backend.get_user_profile("fresh").topic_prefs == []
+    assert any(not record.result.ok for record in result.trace)
+
+
+def test_explicit_avoidance_is_applied_even_when_model_skips_mapper(backend):
+    llm = FakeLLM(
+        completion(tool_calls=[call("search_movies", {"query": "sci-fi", "limit": 10})]),
+        completion("I found some safe options."),
+    )
+    result = make_agent(backend, llm, user_id="fresh").run_turn("I don't want spiders; recommend sci-fi")
+
+    search = next(record for record in result.trace if record.name == "search_movies")
+    assert search.result.ok
+    assert search.result.output["excluded_topics"] == ["spiders"]
+    assert all(
+        warning["status"] != "present"
+        for movie in search.result.output["results"]
+        for warning in movie["warnings"]
+        if warning["topic_name"] == "spiders"
+    )
     text = json.dumps(TOOL_SPECS)
     assert "anyOf" not in text and '"default": null' not in text
     warnings = next(s for s in TOOL_SPECS if s["function"]["name"] == "get_movie_warnings")

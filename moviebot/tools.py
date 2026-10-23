@@ -13,7 +13,7 @@ from typing import Any, Callable
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
-from moviebot.contracts import ToolBackend, ToolError
+from moviebot.contracts import ProfileUpdateStrictness, ToolBackend, ToolError
 
 
 class SearchMoviesArgs(BaseModel):
@@ -50,6 +50,17 @@ class GetUserProfileArgs(BaseModel):
     pass
 
 
+class RequestProfileUpdateArgs(BaseModel):
+    topic_id: int = Field(description="Topic id from map_phrase_to_topics or the user's profile.")
+    strictness: ProfileUpdateStrictness = Field(
+        description="never = remove from recommendations, warn = recommend with a warning, fine = remove this preference."
+    )
+
+
+class ConfirmProfileUpdateArgs(BaseModel):
+    proposal_id: str = Field(description="The proposal id returned by request_profile_update.")
+
+
 @dataclass(frozen=True)
 class ToolSpec:
     name: str
@@ -62,6 +73,16 @@ SPECS = [
         "get_user_profile",
         "Get the user's saved preferences: topics they never want to see and topics they want warnings about.",
         GetUserProfileArgs,
+    ),
+    ToolSpec(
+        "request_profile_update",
+        "Prepare a user preference change. This never changes the profile; ask the user for confirmation first.",
+        RequestProfileUpdateArgs,
+    ),
+    ToolSpec(
+        "confirm_profile_update",
+        "Apply a previously requested profile change only after the user explicitly confirmed it in a later message.",
+        ConfirmProfileUpdateArgs,
     ),
     ToolSpec(
         "map_phrase_to_topics",
@@ -134,9 +155,14 @@ class ToolDispatcher:
     def __init__(self, backend: ToolBackend, user_id: str):
         self.backend = backend
         self.user_id = user_id
+        self._pending_profile_update: dict | None = None
+        self._proposal_counter = 0
+        self._turn_excluded_topic_ids: set[int] = set()
         self._specs = {spec.name: spec for spec in SPECS}
         self._handlers: dict[str, Callable[[Any], dict]] = {
             "get_user_profile": self._get_user_profile,
+            "request_profile_update": self._request_profile_update,
+            "confirm_profile_update": self._confirm_profile_update,
             "map_phrase_to_topics": self._map_phrase_to_topics,
             "search_movies": self._search_movies,
             "get_movie_warnings": self._get_movie_warnings,
@@ -163,8 +189,73 @@ class ToolDispatcher:
             return _error(name, e.message, hint=e.hint, args=args.model_dump())
         return ToolResult(name=name, ok=True, args=args.model_dump(), output=output)
 
+    def begin_turn(self, user_text: str) -> set[int]:
+        """Resolve explicit avoidance language before the model chooses tools.
+
+        This is a safety net, not a replacement for the LLM's mapper. It makes
+        phrases such as ``no spiders`` apply to every search in this turn even
+        when a small model forgets to call ``map_phrase_to_topics`` first.
+        """
+        self._turn_excluded_topic_ids = set()
+        lowered = user_text.casefold()
+        triggers = ("avoid", "don't want", "do not want", "no ", "afraid", "scared", "sợ", "tránh", "không muốn")
+        if any(trigger in lowered for trigger in triggers):
+            matches = self.backend.map_phrase_to_topics(user_text)
+            self._turn_excluded_topic_ids = {m.topic_id for m in matches if m.score >= 0.8}
+        return set(self._turn_excluded_topic_ids)
+
     def _get_user_profile(self, args: GetUserProfileArgs) -> dict:
         return self.backend.get_user_profile(self.user_id).model_dump(mode="json")
+
+    def _request_profile_update(self, args: RequestProfileUpdateArgs) -> dict:
+        topic = self.backend.get_topic(args.topic_id)
+        self._proposal_counter += 1
+        proposal_id = f"profile-change-{self._proposal_counter}"
+        self._pending_profile_update = {
+            "proposal_id": proposal_id,
+            "topic_id": args.topic_id,
+            "topic_name": topic.name,
+            "strictness": args.strictness,
+        }
+        return {
+            "status": "confirmation_required",
+            **self._pending_profile_update,
+            "message": "Ask the user to confirm. Do not apply this change yet.",
+        }
+
+    def _confirm_profile_update(self, args: ConfirmProfileUpdateArgs) -> dict:
+        pending = self._pending_profile_update
+        if pending is None:
+            raise ToolError("there is no pending profile change", hint="request a new profile change first")
+        if args.proposal_id != pending["proposal_id"]:
+            raise ToolError("that profile proposal is no longer pending", hint="request a new profile change")
+        profile = self.backend.update_user_preference(
+            self.user_id, pending["topic_id"], pending["strictness"]
+        )
+        self._pending_profile_update = None
+        return {"status": "updated", "profile": profile.model_dump(mode="json")}
+
+    @property
+    def pending_profile_update(self) -> dict | None:
+        return self._pending_profile_update.copy() if self._pending_profile_update else None
+
+    def cancel_profile_update(self) -> dict | None:
+        pending = self._pending_profile_update
+        self._pending_profile_update = None
+        return pending
+
+    def confirm_pending_profile_update(self) -> ToolResult:
+        pending = self._pending_profile_update
+        if pending is None:
+            return _error("confirm_profile_update", "there is no pending profile change")
+        return self.call("confirm_profile_update", json.dumps({"proposal_id": pending["proposal_id"]}))
+
+    def reject_profile_confirmation(self) -> ToolResult:
+        return _error(
+            "confirm_profile_update",
+            "profile changes require an explicit confirmation in a separate user message",
+            hint="ask the user to confirm before calling confirm_profile_update",
+        )
 
     def _map_phrase_to_topics(self, args: MapPhraseArgs) -> dict:
         matches = self.backend.map_phrase_to_topics(args.phrase)
@@ -174,7 +265,26 @@ class ToolDispatcher:
         return output
 
     def _search_movies(self, args: SearchMoviesArgs) -> dict:
-        return self.backend.search_movies(user_id=self.user_id, **args.model_dump()).model_dump(mode="json")
+        payload = args.model_dump()
+        payload["exclude_topic_ids"] = sorted(
+            set(payload["exclude_topic_ids"]) | self._turn_excluded_topic_ids
+        )
+        result = self.backend.search_movies(user_id=self.user_id, **payload)
+
+        # Deterministic safety gate: the backend contract says forbidden topics
+        # must never be returned as present. Fail closed if an implementation
+        # violates that contract, instead of letting the LLM recommend a leak.
+        profile = self.backend.get_user_profile(self.user_id)
+        forbidden = profile.topic_ids("never") | set(payload["exclude_topic_ids"])
+        for movie in result.results:
+            present = {warning.topic_id for warning in movie.warnings if warning.status == "present"}
+            leaked = sorted(present & forbidden)
+            if leaked:
+                raise ToolError(
+                    f"safety gate rejected {movie.title!r}: forbidden topic(s) present {leaked}",
+                    hint="retry search; never recommend a movie rejected by the safety gate",
+                )
+        return result.model_dump(mode="json")
 
     def _get_movie_warnings(self, args: GetMovieWarningsArgs) -> dict:
         # Always report the user's own topics, so a missing one shows up as "unknown" rather than silence.

@@ -16,8 +16,13 @@ class Settings(BaseSettings):
     llm_model: str = "google/gemma-4-e2b"
     llm_api_key: SecretStr = SecretStr("not-needed")  # local servers ignore it
     llm_temperature: float = 0.2
+    llm_max_tokens: int = 500
     llm_timeout: float = 120.0  # seconds; the local model takes about 25s per call
 
     agent_max_tool_rounds: int = 6
+    retrieval_top_k: int = 10
+    retrieval_min_similarity: float = 0.0
+    memory_max_recommendations: int = 5
+    strict_unknown_warnings: bool = False
 
     mock_data_dir: Path = REPO_ROOT / "data" / "mock"

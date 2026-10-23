@@ -36,7 +36,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     settings = Settings()
-    backend = MockBackend(settings.mock_data_dir)
+    backend = MockBackend(settings.mock_data_dir, exclude_unknown=settings.strict_unknown_warnings)
     try:
         profile = backend.get_user_profile(args.user)
     except NotFoundError as e:
