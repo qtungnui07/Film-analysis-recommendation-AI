@@ -9,10 +9,11 @@ from __future__ import annotations
 
 from typing import Literal, Protocol, Sequence
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 WarningStatus = Literal["present", "absent", "unknown"]
 Strictness = Literal["never", "warn"]
+ProfileUpdateStrictness = Literal["never", "warn", "fine"]
 
 
 def vote_status(yes_votes: int, no_votes: int) -> WarningStatus:
@@ -54,6 +55,10 @@ class MovieResult(Movie):
     warnings: list[TopicWarning]
     # Names of excluded topics with no DTDD votes for this movie: the bot must say "no data".
     unknown_topics: list[str]
+    # Human-readable, data-backed reasons for the ranking. These are optional so
+    # existing backends remain compatible with the contract.
+    relevance_score: float = 0.0
+    match_reasons: list[str] = Field(default_factory=list)
 
 
 class SearchResults(BaseModel):
@@ -104,6 +109,19 @@ class NotFoundError(ToolError):
 
 
 class ToolBackend(Protocol):
+    def get_topic(self, topic_id: int) -> Topic:
+        """Return one topic or raise ``NotFoundError`` for an unknown id."""
+        ...
+
+    def update_user_preference(
+        self,
+        user_id: str,
+        topic_id: int,
+        strictness: ProfileUpdateStrictness,
+    ) -> UserProfile:
+        """Update one preference; ``fine`` removes the saved preference."""
+        ...
+
     def search_movies(
         self,
         user_id: str,

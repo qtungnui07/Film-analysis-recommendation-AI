@@ -1,0 +1,49 @@
+# Changelog
+
+## 2026-10-22 — Profile safety and agent reliability
+
+### Added
+
+- Added a deterministic search safety gate. If a backend ever returns a movie with a present `never` topic, the result is rejected before the LLM can recommend it.
+- Added turn-level phrase pre-processing for explicit avoidance language (`avoid`, `no`, `sợ`, `tránh`, `không muốn`, etc.). Matched topics are passed as temporary exclusions even if a small model forgets to call the mapper.
+- Added structured `SessionState` memory for recent recommendations, the latest query, and temporary exclusions. Follow-up turns receive a compact, explicit context in addition to the transcript.
+- Added explainability fields to every `MovieResult`: `relevance_score` and `match_reasons`.
+- Added a lightweight hybrid mock ranking: exact-title matches first, then keyword overlap, with rating as a tie-breaker.
+- Added [evaluation.py](moviebot/evaluation.py) helpers for safety recall, warning accuracy, and phrase-mapping accuracy.
+
+- Added `request_profile_update` to create a pending preference change without writing it.
+- Added `confirm_profile_update` to apply a pending change using a proposal id.
+- Added support for three profile actions:
+  - `never`: exclude a topic from recommendations.
+  - `warn`: keep recommendations but report the topic when present.
+  - `fine`: remove the saved preference.
+- Added deterministic confirmation handling in `Agent`:
+  - A change is applied only after an explicit confirmation in a later user turn.
+  - Explicit rejection cancels the pending change.
+  - Ambiguous replies do not change the profile.
+  - A model cannot confirm a change during the same turn in which it requested it.
+- Added `llm_max_tokens` configuration (default: `500`) and passed it to the chat completion request.
+- Documented `LLM_MAX_TOKENS` in `.env.example`.
+- Added retrieval/memory settings: `RETRIEVAL_TOP_K`, `RETRIEVAL_MIN_SIMILARITY`, `MEMORY_MAX_RECOMMENDATIONS`, and `STRICT_UNKNOWN_WARNINGS`.
+- Added mock-backend support for reading topics and updating in-memory user preferences.
+
+### Changed
+
+- Updated the system prompt to describe the proposal/confirmation workflow.
+- Updated the system prompt to require data-backed recommendation explanations and prohibit invented reasons.
+- Expanded tool schemas with profile-update tools while keeping validation in Pydantic models.
+- Added profile-update methods to the `ToolBackend` contract.
+- Updated the tool schema test for the new tools.
+
+### Notes
+
+- Mock profile changes are in-memory and last for the current backend process only. A production backend should persist them in the user database.
+- The mock ranking is intentionally dependency-free; production retrieval should replace it with hybrid BM25/vector search and a learned or tuned reranker.
+- Evaluation helpers are library functions; the report/evaluation runner still needs to provide the project’s labelled test cases.
+- Existing movie safety rules remain unchanged: `never` topics are filtered deterministically, and missing warning data remains `unknown` rather than safe.
+
+### Verification
+
+```text
+42 passed, 1 deselected
+```

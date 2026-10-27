@@ -25,6 +25,7 @@ from moviebot.contracts import (
     TopicPref,
     TopicWarning,
     UserProfile,
+    ProfileUpdateStrictness,
     vote_status,
 )
 
@@ -79,6 +80,29 @@ class MockBackend:
 
     # ToolBackend
 
+    def get_topic(self, topic_id: int) -> Topic:
+        try:
+            return self._topics[topic_id]
+        except KeyError as exc:
+            raise NotFoundError(f"no topic with id {topic_id}", hint="use map_phrase_to_topics to find a topic id") from exc
+
+    def update_user_preference(
+        self,
+        user_id: str,
+        topic_id: int,
+        strictness: ProfileUpdateStrictness,
+    ) -> UserProfile:
+        self.get_topic(topic_id)
+        user = self._users.get(user_id)
+        if user is None:
+            raise NotFoundError(f"no user {user_id!r}", hint=f"known users: {', '.join(self._users)}")
+        prefs = user["topic_prefs"]
+        if strictness == "fine":
+            prefs.pop(str(topic_id), None)
+        else:
+            prefs[str(topic_id)] = strictness
+        return self.get_user_profile(user_id)
+
     def search_movies(
         self,
         user_id: str,
@@ -100,7 +124,14 @@ class MockBackend:
             if (min_rating is None or m.rating >= min_rating)
             and (not wanted_genres or wanted_genres & {_genre_key(g) for g in m.genres})
         ]
-        candidates.sort(key=lambda m: (len(query_words & self._movie_keywords[m.movie_id]), m.rating), reverse=True)
+        def relevance(movie: Movie) -> float:
+            overlap = len(query_words & self._movie_keywords[movie.movie_id])
+            exact_title = 1.0 if query.strip().casefold() == movie.title.casefold() else 0.0
+            # A lightweight hybrid score for the mock: lexical relevance is
+            # primary, while rating breaks ties and exact titles win strongly.
+            return exact_title * 10.0 + overlap * 2.0 + movie.rating / 10.0
+
+        candidates.sort(key=relevance, reverse=True)
 
         results: list[MovieResult] = []
         removed = 0
@@ -112,11 +143,26 @@ class MockBackend:
             if "present" in statuses.values() or (self.exclude_unknown and unknown):
                 removed += 1
                 continue
+            score = relevance(movie)
+            reasons: list[str] = []
+            if query.strip().casefold() == movie.title.casefold():
+                reasons.append("exact title match")
+            overlap = len(query_words & self._movie_keywords[movie.movie_id])
+            if overlap:
+                reasons.append(f"matches {overlap} query keyword{'s' if overlap != 1 else ''}")
+            if min_rating is not None:
+                reasons.append(f"rating {movie.rating:.1f} meets your minimum")
+            if wanted_genres:
+                reasons.append("matches the requested genre")
+            if not reasons:
+                reasons.append("best available match for the request")
             results.append(
                 MovieResult(
                     **movie.model_dump(),
                     warnings=[self._warning(movie.movie_id, t) for t in reported],
                     unknown_topics=unknown,
+                    relevance_score=round(score, 3),
+                    match_reasons=reasons,
                 )
             )
         return SearchResults(
