@@ -4,7 +4,7 @@ from moviebot.config import REPO_ROOT
 from moviebot.mock_backend import MockBackend
 
 DATA_DIR = REPO_ROOT / "data" / "mock"
-SPIDERS, DOG_DIES, NEEDLES, JUMP_SCARES = 1, 2, 4, 6
+SPIDERS, DOG_DIES, NEEDLES, JUMP_SCARES, ANIMAL_DIES = 1, 2, 4, 6, 11
 
 
 @pytest.fixture

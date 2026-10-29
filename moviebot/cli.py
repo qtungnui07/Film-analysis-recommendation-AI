@@ -1,4 +1,4 @@
-"""Terminal chat for trying the agent: python -m moviebot.cli --user arachno --verbose"""
+"""Terminal chat for trying the agent: python -m moviebot.cli --user arachno --verbose [--db]"""
 
 from __future__ import annotations
 
@@ -11,7 +11,9 @@ import openai
 from moviebot.agent import Agent
 from moviebot.config import Settings
 from moviebot.contracts import NotFoundError
+from moviebot.db_backend import SqliteBackend
 from moviebot.mock_backend import MockBackend
+from moviebot.sources import DtddClient, TmdbClient
 from moviebot.tools import ToolDispatcher
 
 
@@ -30,13 +32,27 @@ def _summarize(output: dict) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Chat with the movie bot (mock tools).")
-    parser.add_argument("--user", default="arachno", help="demo user id from data/mock/users.json")
+    parser = argparse.ArgumentParser(description="Chat with the movie bot.")
+    parser.add_argument("--user", default="arachno", help="demo user id: arachno, dog_lover or fresh")
     parser.add_argument("--verbose", "-v", action="store_true", help="print every tool call")
+    parser.add_argument("--db", action="store_true", help="use the real database instead of data/mock")
     args = parser.parse_args(argv)
 
     settings = Settings()
-    backend = MockBackend(settings.mock_data_dir, exclude_unknown=settings.strict_unknown_warnings)
+    if args.db:
+        dtdd_key, tmdb_key = settings.dtdd_key.get_secret_value(), settings.tmdb_key.get_secret_value()
+        try:
+            backend = SqliteBackend(
+                settings.db_path,
+                exclude_unknown=settings.strict_unknown_warnings,
+                dtdd=DtddClient(dtdd_key) if dtdd_key else None,
+                tmdb=TmdbClient(tmdb_key) if tmdb_key else None,
+            )
+        except FileNotFoundError as e:
+            print(e, file=sys.stderr)
+            return 2
+    else:
+        backend = MockBackend(settings.mock_data_dir, exclude_unknown=settings.strict_unknown_warnings)
     try:
         profile = backend.get_user_profile(args.user)
     except NotFoundError as e:

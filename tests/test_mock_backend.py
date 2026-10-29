@@ -1,23 +1,57 @@
 import pytest
 
-from conftest import DATA_DIR, DOG_DIES, JUMP_SCARES, NEEDLES, SPIDERS, movies_with
-from moviebot.contracts import NotFoundError, ToolError, vote_status
+from conftest import ANIMAL_DIES, DATA_DIR, DOG_DIES, JUMP_SCARES, NEEDLES, SPIDERS, movies_with
+from moviebot.contracts import NotFoundError, Topic, ToolError, label_status, topic_warning, vote_label
 from moviebot.mock_backend import MockBackend
 
 
-def test_vote_status_rule():
-    assert vote_status(0, 0) == "unknown"
-    assert vote_status(5, 5) == "present"  # ties fail safe
-    assert vote_status(1, 9) == "absent"
-    assert vote_status(9, 1) == "present"
+def test_vote_label_uses_the_datasets_75_percent_rule():
+    assert vote_label(0, 0) is None
+    assert vote_label(76, 24) == "yes"
+    assert vote_label(75, 25) == "unclear"  # strictly more than 75%, as the ML-DDD generator does
+    assert vote_label(5, 5) == "unclear"
+    assert vote_label(1, 9) == "no"
+
+
+def test_label_status_rule():
+    assert label_status(None) == "unknown"
+    assert label_status("yes") == "present"
+    assert label_status("unclear") == "present"  # split votes fail safe
+    assert label_status("no") == "absent"
+
+
+def test_broad_topic_covers_narrower_ones():
+    topics = {
+        1: Topic(topic_id=1, name="a non-human character dies", category="Death", covers=[2]),
+        2: Topic(topic_id=2, name="an animal dies", category="Animal Death", covers=[3, 4]),
+        3: Topic(topic_id=3, name="a dog dies", category="Animal Death"),
+        4: Topic(topic_id=4, name="a cat dies", category="Animal Death"),
+    }
+    animal_no_dog_yes = topic_warning(2, topics, {2: "no", 3: "yes"})
+    assert animal_no_dog_yes.status == "present"
+    assert animal_no_dog_yes.label == "no"
+    assert animal_no_dog_yes.present_via == ["a dog dies"]
+    assert topic_warning(1, topics, {3: "unclear"}).present_via == ["a dog dies"]  # through two levels
+    assert topic_warning(2, topics, {3: "no", 4: "no"}).status == "unknown"  # other animals can still die
+    assert topic_warning(3, topics, {2: "yes"}).status == "unknown"  # covering only goes broad to narrow
 
 
 def test_mock_data_is_consistent(backend):
-    for movie_id, topic_id in backend._votes:
+    for movie_id, labels in backend._labels.items():
         assert movie_id in backend._movies
-        assert topic_id in backend._topics
+        assert labels.keys() <= backend._topics.keys()
+        assert set(labels.values()) <= {"yes", "no", "unclear"}
     for user_id in backend.user_ids:
         backend.get_user_profile(user_id)  # every pref points at a real topic
+
+
+def test_never_broad_topic_excludes_movies_with_a_narrower_one(backend):
+    # Marley & Me is labelled "no animal dies" but "a dog dies"; John Wick has only the dog label.
+    found = backend.search_movies("fresh", "dog", exclude_topic_ids=[ANIMAL_DIES], limit=10)
+    assert not {m.title for m in found.results} & {"Marley & Me", "John Wick"}
+    marley = backend.get_movie_warnings(title="Marley & Me", topic_ids=[ANIMAL_DIES])
+    animal = next(w for w in marley.warnings if w.topic_id == ANIMAL_DIES)
+    assert (animal.status, animal.present_via) == ("present", ["a dog dies"])
 
 
 def test_fixture_has_the_cases_the_tests_rely_on(backend):

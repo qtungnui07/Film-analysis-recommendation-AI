@@ -1,5 +1,5 @@
 {
-  "_note": "Mock DTDD-style topics for development. Ids are made up; the data lead replaces them with the real DTDD topic list.",
+  "_note": "Mock DTDD-style topics for development. Ids are made up. covers lists the narrower topics a topic includes.",
   "topics": [
     {"topic_id": 1, "name": "spiders", "category": "Animals",
      "synonyms": ["spider", "spiders", "arachnid", "arachnids", "arachnophobia", "tarantula", "tarantulas", "eight legs", "cobweb", "cobwebs"]},
@@ -20,6 +20,8 @@
     {"topic_id": 9, "name": "claustrophobic scenes", "category": "Spaces",
      "synonyms": ["claustrophobia", "claustrophobic", "enclosed space", "enclosed spaces", "tight spaces", "buried alive", "being trapped"]},
     {"topic_id": 10, "name": "vomiting", "category": "Body",
-     "synonyms": ["vomit", "vomiting", "throwing up", "throw up", "puking", "emetophobia"]}
+     "synonyms": ["vomit", "vomiting", "throwing up", "throw up", "puking", "emetophobia"]},
+    {"topic_id": 11, "name": "an animal dies", "category": "Animals", "covers": [2],
+     "synonyms": ["animal dies", "animal death", "animals die", "animal dying", "dead animal", "dead animals", "animal gets killed"]}
   ]
 }

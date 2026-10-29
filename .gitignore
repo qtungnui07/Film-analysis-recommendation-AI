@@ -157,3 +157,9 @@ __pycache__/
 *.db
 chroma/
 !.env.example
+
+# Datasets: downloaded or built locally, never committed (their licences forbid redistribution).
+# See data/README.md. Only the mock fixtures and the README are tracked.
+data/*
+!data/README.md
+!data/mock/

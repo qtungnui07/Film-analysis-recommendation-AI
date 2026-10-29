@@ -26,3 +26,6 @@ class Settings(BaseSettings):
     strict_unknown_warnings: bool = False
 
     mock_data_dir: Path = REPO_ROOT / "data" / "mock"
+    db_path: Path = REPO_ROOT / "data" / "moviebot.db"  # built by `python -m moviebot.build_db`
+    dtdd_key: SecretStr = SecretStr("")  # empty turns DTDD-on-demand off
+    tmdb_key: SecretStr = SecretStr("")  # empty turns the TMDB fallback and overview fetching off

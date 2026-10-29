@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026-10-29 — Real data layer
+
+### Changed (contract: affects every layer)
+
+- `TopicWarning` carries the DTDD `label` (`yes` / `no` / `unclear`, or `None` when nobody voted) instead of `yes_votes` / `no_votes`. The ML-DDD dataset only has labels. `vote_status` is replaced by `vote_label` (votes to label, using the dataset's more-than-75% rule) and `label_status` (`unclear` counts as present, so it fails safe).
+- `Topic.covers` lists the narrower topics a topic includes. `topic_warning` makes a topic present when any narrower topic is present, so "never: an animal dies" also hides a movie labelled animal = no, dog = yes. `TopicWarning.present_via` names the narrower topics responsible.
+- The mock fixtures now store labels, converted with the same rule. Three mock warnings changed from absent to present: their votes were split, so they are now `unclear`. A new mock topic, "an animal dies", covers "a dog dies".
+- The system prompt and the `get_movie_warnings` description explain `unclear` and `present_via`.
+
+### Added
+
+- `python -m moviebot.build_db` builds `data/moviebot.db` from the raw IMDb, MovieLens and ML-DDD downloads. It's reproducible. The catalogue is the 12,779 non-adult IMDb movies and TV movies with at least 10k votes. Topics use DTDD's ids; reworded and retired topics are mapped explicitly.
+- `SqliteBackend` (`python -m moviebot.cli --db`) fetches DTDD labels on demand when the dataset lacks them, falls back to TMDB for movies outside the catalogue, and persists profile edits.
+- `python -m moviebot.fetch_overviews --limit N` fills plot overviews from TMDB, most-voted first. It's resumable.
+- [data/README.md](data/README.md): sources, terms, build steps, the label rules and the topic changes.
+- `TMDB_KEY` in `.env.example`.
+
+### Removed
+
+- The LFS rules, and the raw data from git. The licences forbid redistribution, so everyone downloads and builds locally.
+
+### Verification
+
+```text
+54 passed, 1 deselected
+```
+
 ## 2026-10-22 — Profile safety and agent reliability
 
 ### Added

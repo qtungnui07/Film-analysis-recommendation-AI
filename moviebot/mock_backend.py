@@ -11,9 +11,10 @@ import difflib
 import json
 import re
 from pathlib import Path
-from typing import Sequence
+from typing import Mapping, Sequence
 
 from moviebot.contracts import (
+    DtddLabel,
     Movie,
     MovieResult,
     MovieWarnings,
@@ -26,7 +27,8 @@ from moviebot.contracts import (
     TopicWarning,
     UserProfile,
     ProfileUpdateStrictness,
-    vote_status,
+    narrower_topics,
+    topic_warning,
 )
 
 _STOPWORDS = {
@@ -56,23 +58,47 @@ def _genre_key(genre: str) -> str:
 
 class MockBackend:
     def __init__(self, data_dir: Path, *, exclude_unknown: bool = False):
-        """`exclude_unknown=True` also drops movies whose excluded topics have no votes."""
-        self.exclude_unknown = exclude_unknown
+        """`exclude_unknown=True` also drops movies whose excluded topics have no label."""
 
         def load(name: str) -> dict:
             return json.loads((Path(data_dir) / name).read_text(encoding="utf-8"))
 
-        topics = load("topics.json")["topics"]
+        labels: dict[str, dict[int, DtddLabel]] = {}
+        for row in load("triggers.json")["labels"]:
+            labels.setdefault(row["movie_id"], {})[row["topic_id"]] = row["label"]
+        self._setup(
+            load("topics.json")["topics"],
+            [Movie(**m) for m in load("movies.json")["movies"]],
+            labels,
+            {u["user_id"]: u for u in load("users.json")["users"]},
+            exclude_unknown=exclude_unknown,
+        )
+
+    def _setup(
+        self,
+        topics: list[dict],
+        movies: list[Movie],
+        labels: dict[str, dict[int, DtddLabel]],
+        users: dict[str, dict],
+        *,
+        exclude_unknown: bool,
+    ) -> None:
+        """Shared by every loader. `topics` rows are Topic fields plus `synonyms`; `labels` is per movie."""
+        self.exclude_unknown = exclude_unknown
         self._topics = {t["topic_id"]: Topic(**t) for t in topics}
         self._synonyms = {
             t["topic_id"]: {" ".join(_words(s)) for s in [t["name"], *t["synonyms"]]} for t in topics
         }
-        self._movies = {m["movie_id"]: Movie(**m) for m in load("movies.json")["movies"]}
-        self._votes = {(v["movie_id"], v["topic_id"]): (v["yes"], v["no"]) for v in load("triggers.json")["votes"]}
-        self._users = {u["user_id"]: u for u in load("users.json")["users"]}
-        self._movie_keywords = {
-            m.movie_id: _keywords(" ".join([m.title, *m.genres, m.overview])) for m in self._movies.values()
-        }
+        self._labels = labels
+        self._users = users
+        self._movies: dict[str, Movie] = {}
+        self._movie_keywords: dict[str, set[str]] = {}
+        for movie in movies:
+            self._index_movie(movie)
+
+    def _index_movie(self, movie: Movie) -> None:
+        self._movies[movie.movie_id] = movie
+        self._movie_keywords[movie.movie_id] = _keywords(" ".join([movie.title, *movie.genres, movie.overview]))
 
     @property
     def user_ids(self) -> list[str]:
@@ -179,7 +205,7 @@ class MockBackend:
     ) -> MovieWarnings:
         self._check_topics(topic_ids or ())
         movie = self._find_movie(movie_id, title)
-        voted = {t for (m, t) in self._votes if m == movie.movie_id}
+        voted = set(self._labels_for(movie.movie_id))
         return MovieWarnings(
             movie_id=movie.movie_id,
             title=movie.title,
@@ -213,14 +239,12 @@ class MockBackend:
     # Helpers
 
     def _warning(self, movie_id: str, topic_id: int) -> TopicWarning:
-        yes, no = self._votes.get((movie_id, topic_id), (0, 0))
-        return TopicWarning(
-            topic_id=topic_id,
-            topic_name=self._topics[topic_id].name,
-            yes_votes=yes,
-            no_votes=no,
-            status=vote_status(yes, no),
-        )
+        needed = {topic_id} | narrower_topics(topic_id, self._topics)
+        return topic_warning(topic_id, self._topics, self._labels_for(movie_id, needed))
+
+    def _labels_for(self, movie_id: str, needed: set[int] = frozenset()) -> Mapping[int, DtddLabel]:
+        """One movie's labels. `needed` lets a backend with a live source fetch the ones it lacks."""
+        return self._labels.get(movie_id, {})
 
     def _check_topics(self, topic_ids: Sequence[int]) -> None:
         unknown = sorted(set(topic_ids) - self._topics.keys())

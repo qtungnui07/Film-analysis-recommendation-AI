@@ -97,7 +97,8 @@ SPECS = [
     ),
     ToolSpec(
         "get_movie_warnings",
-        "Get the content warnings for one movie, with vote counts. Status is present, absent, or unknown (no data).",
+        "Get the content warnings for one movie. Status is present, absent, or unknown (no data). "
+        "Label 'unclear' means voters disagree; present_via names the narrower topics that make a topic present.",
         GetMovieWarningsArgs,
     ),
 ]
