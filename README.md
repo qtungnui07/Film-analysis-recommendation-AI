@@ -63,6 +63,12 @@ It writes `data/moviebot.db` (about 75 MB) and refuses to overwrite an existing 
 uv run python -m moviebot.fetch_overviews --limit 200
 ```
 
+**5. Search index.** `--db` needs it. The first run downloads all-MiniLM-L6-v2 (80 MB) and takes about 10 minutes on a laptop CPU. Rerun it after fetching overviews; it only embeds what changed, so later runs take seconds:
+
+```
+uv run python -m moviebot.build_index
+```
+
 While the bot runs on the real database, it also fills gaps by itself:
 - **Missing labels:** it fetches DTDD labels the dataset lacks, once per movie.
 - **Missing movies:** it looks up movies outside the catalogue on TMDB.
@@ -86,6 +92,7 @@ uv run --extra dev pytest -m live      # one end-to-end chat against the LLM in 
 | [moviebot/contracts.py](moviebot/contracts.py) | The tool contracts every layer builds against, and the rules for turning DTDD labels into warnings |
 | [moviebot/agent.py](moviebot/agent.py), [tools.py](moviebot/tools.py), [prompts.py](moviebot/prompts.py) | The LLM tool-calling loop, tool schemas and safety gate, and the system prompt |
 | [moviebot/mock_backend.py](moviebot/mock_backend.py) | Backend over `data/mock/*.json`, used by the tests |
-| [moviebot/db_backend.py](moviebot/db_backend.py) | Backend over `data/moviebot.db`, with DTDD and TMDB on demand |
-| [moviebot/build_db.py](moviebot/build_db.py), [fetch_overviews.py](moviebot/fetch_overviews.py) | Database build and overview fetching |
+| [moviebot/db_backend.py](moviebot/db_backend.py) | Backend over `data/moviebot.db`, with semantic search, and DTDD and TMDB on demand |
+| [moviebot/retrieval.py](moviebot/retrieval.py) | Chroma vector index (all-MiniLM-L6-v2, local) for movies and topic phrases |
+| [moviebot/build_db.py](moviebot/build_db.py), [fetch_overviews.py](moviebot/fetch_overviews.py), [build_index.py](moviebot/build_index.py) | Database build, overview fetching, search index build |
 | [moviebot/evaluation.py](moviebot/evaluation.py) | Safety recall, warning accuracy and phrase-mapping metrics |

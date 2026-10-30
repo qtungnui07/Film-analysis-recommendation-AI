@@ -19,8 +19,11 @@ Then set `DTDD_KEY` and `TMDB_KEY` in `.env` (see `.env.example`).
 ```
 python -m moviebot.build_db                    # about 1–2 minutes, about 75 MB
 python -m moviebot.fetch_overviews --limit 200 # plot overviews from TMDB, most-voted first; rerun to continue
+python -m moviebot.build_index                 # search index; about 10 minutes the first time, then seconds
 python -m moviebot.cli --db --user arachno -v  # chat against the real data
 ```
+
+Rerun `build_index` after `fetch_overviews`. It embeds only the texts that changed.
 
 `build_db` refuses to overwrite `data/moviebot.db`. `--force` rebuilds it but loses fetched overviews, labels fetched on demand and profile edits.
 
@@ -33,6 +36,15 @@ The schema, with a comment on every column, is in [db_backend.py](../moviebot/db
 - **labels**: one `yes` / `no` / `unclear` per (movie, topic). The dataset covers 7,327 catalogue movies. The DTDD data stops in 2019 because it comes through MovieLens; newer movies get labels on demand.
 - **genome**: a 1,128-tag relevance vector (atmospheric, dark, feel-good…) for 8,993 catalogue movies. It's for retrieval only, never for warnings: its scores are machine predictions, not votes.
 - **users**: three demo profiles that match `mock/users.json`.
+
+## What's in `chroma/`
+
+The search index that `build_index` makes. It's a local Chroma store (about 45 MB), embedded with all-MiniLM-L6-v2 through Chroma's ONNX runtime. The model downloads once to `~/.cache/chroma`.
+
+- **movies**: one text per catalogue movie: title, year, genres, its 10 most relevant genome tags, and the overview if TMDB has one. Few movies have overviews yet, so the genome tags carry most of the meaning.
+- **topics**: each topic's name and DTDD keywords, for `map_phrase_to_topics`. Keywords that several topics share, like "fear" or "death", are left out because they can't tell topics apart.
+
+The index only ranks. Warnings and exclusions always come from the labels, never from similarity.
 
 ## How DTDD votes become warnings
 

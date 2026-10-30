@@ -40,16 +40,23 @@ def main(argv: list[str] | None = None) -> int:
 
     settings = Settings()
     if args.db:
+        from moviebot.retrieval import VectorIndex  # chromadb is slow to import; only --db needs it
+
         dtdd_key, tmdb_key = settings.dtdd_key.get_secret_value(), settings.tmdb_key.get_secret_value()
+        index = VectorIndex(settings.index_path, min_similarity=settings.retrieval_min_similarity)
         try:
             backend = SqliteBackend(
                 settings.db_path,
                 exclude_unknown=settings.strict_unknown_warnings,
                 dtdd=DtddClient(dtdd_key) if dtdd_key else None,
                 tmdb=TmdbClient(tmdb_key) if tmdb_key else None,
+                index=index,
             )
         except FileNotFoundError as e:
             print(e, file=sys.stderr)
+            return 2
+        if not index.movies.count():
+            print(f"{settings.index_path} is empty; build it with: python -m moviebot.build_index", file=sys.stderr)
             return 2
     else:
         backend = MockBackend(settings.mock_data_dir, exclude_unknown=settings.strict_unknown_warnings)

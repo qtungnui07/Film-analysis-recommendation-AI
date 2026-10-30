@@ -7,11 +7,12 @@ exactly, because that is the part that has to be right.
 
 from __future__ import annotations
 
-import difflib
 import json
 import re
 from pathlib import Path
 from typing import Mapping, Sequence
+
+from rapidfuzz import fuzz, process, utils
 
 from moviebot.contracts import (
     DtddLabel,
@@ -37,6 +38,9 @@ _STOPWORDS = {
     "good", "great", "want", "watch", "recommend", "please", "that", "this", "or",
 }
 _GENRE_ALIASES = {"sciencefiction": "scifi", "science": "scifi", "romcom": "romance", "animated": "animation"}
+_TITLE_YEAR = re.compile(r"(.+?)\s*\((\d{4})\)")
+# rapidfuzz WRatio: a title containing the query scores 90, typos score lower. Only "sure" matches resolve.
+_TITLE_SURE, _TITLE_CLOSE = 90, 60
 
 
 def _words(text: str) -> list[str]:
@@ -143,25 +147,16 @@ class MockBackend:
         excluded = profile.topic_ids("never") | set(exclude_topic_ids)
         reported = sorted(excluded | profile.topic_ids("warn"))
         wanted_genres = {_genre_key(g) for g in genres or []}
-        query_words = _keywords(query)
 
         candidates = [
             m for m in self._movies.values()
             if (min_rating is None or m.rating >= min_rating)
             and (not wanted_genres or wanted_genres & {_genre_key(g) for g in m.genres})
         ]
-        def relevance(movie: Movie) -> float:
-            overlap = len(query_words & self._movie_keywords[movie.movie_id])
-            exact_title = 1.0 if query.strip().casefold() == movie.title.casefold() else 0.0
-            # A lightweight hybrid score for the mock: lexical relevance is
-            # primary, while rating breaks ties and exact titles win strongly.
-            return exact_title * 10.0 + overlap * 2.0 + movie.rating / 10.0
-
-        candidates.sort(key=relevance, reverse=True)
 
         results: list[MovieResult] = []
         removed = 0
-        for movie in candidates:
+        for movie, score, reasons in self._rank(query, candidates):
             if len(results) == limit:
                 break
             statuses = {t: self._warning(movie.movie_id, t).status for t in excluded}
@@ -169,13 +164,6 @@ class MockBackend:
             if "present" in statuses.values() or (self.exclude_unknown and unknown):
                 removed += 1
                 continue
-            score = relevance(movie)
-            reasons: list[str] = []
-            if query.strip().casefold() == movie.title.casefold():
-                reasons.append("exact title match")
-            overlap = len(query_words & self._movie_keywords[movie.movie_id])
-            if overlap:
-                reasons.append(f"matches {overlap} query keyword{'s' if overlap != 1 else ''}")
             if min_rating is not None:
                 reasons.append(f"rating {movie.rating:.1f} meets your minimum")
             if wanted_genres:
@@ -238,6 +226,21 @@ class MockBackend:
 
     # Helpers
 
+    def _rank(self, query: str, candidates: list[Movie]) -> list[tuple[Movie, float, list[str]]]:
+        """Candidates best first, each with a score and match reasons. Keyword overlap here; SqliteBackend uses embeddings."""
+        query_words = _keywords(query)
+        ranked = []
+        for movie in candidates:
+            exact_title = query.strip().casefold() == movie.title.casefold()
+            overlap = len(query_words & self._movie_keywords[movie.movie_id])
+            reasons = ["exact title match"] if exact_title else []
+            if overlap:
+                reasons.append(f"matches {overlap} query keyword{'s' if overlap != 1 else ''}")
+            # A lightweight hybrid score for the mock: lexical relevance is
+            # primary, while rating breaks ties and exact titles win strongly.
+            ranked.append((movie, exact_title * 10.0 + overlap * 2.0 + movie.rating / 10.0, reasons))
+        return sorted(ranked, key=lambda r: r[1], reverse=True)
+
     def _warning(self, movie_id: str, topic_id: int) -> TopicWarning:
         needed = {topic_id} | narrower_topics(topic_id, self._topics)
         return topic_warning(topic_id, self._topics, self._labels_for(movie_id, needed))
@@ -262,19 +265,34 @@ class MockBackend:
                 raise NotFoundError(f"no movie with id {movie_id!r}", hint="use search_movies to find the movie_id")
         if not title:
             raise ToolError("give a movie_id or a title")
+        return self._match_title(title)
 
-        wanted = title.strip().casefold()
-        by_title = {m.title.casefold(): m for m in self._movies.values()}
-        if wanted in by_title:
-            return by_title[wanted]
-        partial = [m for key, m in by_title.items() if wanted in key]
-        if len(partial) == 1:
-            return partial[0]
-        if partial:
+    def _match_title(self, title: str) -> Movie:
+        """The one catalogue movie `title` names; "Title (YYYY)" picks between remakes.
+
+        A near miss would attach another movie's warnings, so it only resolves
+        when exactly one title is an exact or sure match; typos get hints.
+        """
+        match = _TITLE_YEAR.fullmatch(title.strip())
+        name, year = (match.group(1), int(match.group(2))) if match else (title.strip(), None)
+        pool = {m.movie_id: m.title for m in self._movies.values() if year is None or m.year == year}
+        sure = [i for i, t in pool.items() if t.casefold() == name.casefold()]
+        close = []
+        if not sure:
+            close = process.extract(
+                name, pool, scorer=fuzz.WRatio, processor=utils.default_process, limit=5, score_cutoff=_TITLE_CLOSE
+            )
+            sure = [i for _, score, i in close if score >= _TITLE_SURE]
+        if len(sure) == 1:
+            return self._movies[sure[0]]
+        if sure:
             raise ToolError(
                 f"{title!r} matches several movies",
-                hint="pick one: " + "; ".join(f"{m.title} ({m.year}, {m.movie_id})" for m in partial),
+                hint="use one movie_id, or add the year in brackets: "
+                + "; ".join(f"{self._movies[i].title} ({self._movies[i].year}, {i})" for i in sure),
             )
-        close = difflib.get_close_matches(wanted, by_title, n=3, cutoff=0.5)
-        hint = "did you mean: " + "; ".join(by_title[c].title for c in close) if close else "try search_movies"
+        hint = (
+            "did you mean: " + "; ".join(f"{self._movies[i].title} ({self._movies[i].year})" for _, _, i in close[:3])
+            if close else "try search_movies"
+        )
         raise NotFoundError(f"no movie titled {title!r}", hint=hint)

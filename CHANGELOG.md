@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-10-29 — Retrieval layer
+
+### Added
+
+- `python -m moviebot.build_index` embeds the database into a local Chroma store in `data/chroma`, using all-MiniLM-L6-v2. It runs locally through Chroma's ONNX runtime, with no torch, LangChain or LlamaIndex. Each movie's text is its title, year, genres, top 10 MovieLens genome tags and overview. Few movies have overviews yet, so the tags carry most of the meaning. Rerunning the build embeds only the texts that changed.
+- With the index (`--db` now requires it), `search_movies` ranks by semantic similarity plus a small rating bonus, and a large boost for a query that is a movie's title. "Something like X" searches with X's own text and leaves X out. Phobia filtering is unchanged and still runs on every result.
+- `map_phrase_to_topics` also matches topic names and DTDD keywords by meaning. On the real data, "people throwing up" finds vomiting and "I'm terrified of anything with eight legs" finds spiders. Bare "eight legs" still finds nothing: MiniLM doesn't link the phrase to spiders, so it would need a keyword.
+- Title lookup uses rapidfuzz. A title resolves only when exactly one movie matches it exactly or surely; otherwise the error lists the candidates with their years and ids. "Title (YYYY)" picks between remakes.
+
+### Fixed
+
+- `get_movie_warnings(title=...)` silently picked one movie when several share a title (499 titles in the catalogue, e.g. The Thing 1982/2011), and could attach the wrong movie's warnings. It now asks which one.
+
+### Verification
+
+```text
+59 passed, 1 deselected
+```
+
 ## 2026-10-29 — Real data layer
 
 ### Changed (contract: affects every layer)

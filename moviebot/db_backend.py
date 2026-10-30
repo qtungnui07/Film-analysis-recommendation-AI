@@ -1,8 +1,12 @@
 """ToolBackend over the SQLite database that `python -m moviebot.build_db` makes.
 
-Search and filtering are MockBackend's (keyword overlap) until the retrieval
-layer lands. What this adds is the live part of the data layer:
+Phobia filtering is MockBackend's, unchanged. What this adds:
 
+- Semantic retrieval, given a VectorIndex (`python -m moviebot.build_index`):
+  search ranks by all-MiniLM-L6-v2 similarity plus rating, with a boost for
+  title matches; "something like X" searches with X's own description; and
+  map_phrase_to_topics also matches topics by meaning. Without an index both
+  fall back to MockBackend's keyword matching.
 - DTDD on demand: when a movie lacks a label the caller needs, or has none at
   all, and DTDD hasn't been asked about it yet, its votes are fetched once,
   turned into labels with the dataset's own 75% rule, and stored. Fresher API
@@ -19,7 +23,9 @@ import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Mapping
+from typing import TYPE_CHECKING, Mapping
+
+from rapidfuzz import fuzz, process, utils
 
 from moviebot.contracts import (
     DtddLabel,
@@ -27,11 +33,15 @@ from moviebot.contracts import (
     NotFoundError,
     ProfileUpdateStrictness,
     ToolError,
+    TopicMatch,
     UserProfile,
     vote_label,
 )
-from moviebot.mock_backend import MockBackend
+from moviebot.mock_backend import _TITLE_YEAR, MockBackend
 from moviebot.sources import DtddClient, TmdbClient
+
+if TYPE_CHECKING:  # chromadb is slow to import; only the CLI's --db path needs it
+    from moviebot.retrieval import VectorIndex
 
 log = logging.getLogger(__name__)
 
@@ -79,7 +89,9 @@ CREATE TABLE users (
 
 # TMDB genre names that differ from IMDb's. TMDB's "TV Movie" has no IMDb genre and is dropped.
 _TMDB_GENRES = {"Science Fiction": "Sci-Fi"}
-_TITLE_YEAR = re.compile(r"(.+?)\s*\((\d{4})\)")
+# "something like Alien", "films similar to Heat". Not "I'd like a comedy".
+_LIKE = re.compile(r"(?:^|\b(?:something|anything|movies?|films?|ones?|more)\s+)(?:like|similar to)\s+(.+)", re.I)
+_TOPIC_MIN_SIMILARITY = 0.5
 
 
 class SqliteBackend(MockBackend):
@@ -90,12 +102,14 @@ class SqliteBackend(MockBackend):
         exclude_unknown: bool = False,
         dtdd: DtddClient | None = None,
         tmdb: TmdbClient | None = None,
+        index: VectorIndex | None = None,
     ):
         if not Path(db_path).exists():
             raise FileNotFoundError(f"{db_path} not found; build it with: python -m moviebot.build_db")
         self._db = sqlite3.connect(db_path)
         self._dtdd = dtdd
         self._tmdb = tmdb
+        self._index = index
         topics = [
             {"topic_id": t, "name": n, "category": c, "covers": json.loads(cv), "synonyms": json.loads(s)}
             for t, n, c, cv, s in self._db.execute("SELECT topic_id, name, category, covers, synonyms FROM topics")
@@ -128,6 +142,46 @@ class SqliteBackend(MockBackend):
                 (json.dumps(self._users[user_id]["topic_prefs"]), user_id),
             )
         return profile
+
+    def map_phrase_to_topics(self, phrase: str) -> list[TopicMatch]:
+        matches = super().map_phrase_to_topics(phrase)
+        if self._index is None or not phrase.strip():
+            return matches
+        scores = {m.topic_id: m.score for m in matches}
+        for topic_id, similarity in self._index.similar_topics(phrase).items():
+            if similarity >= _TOPIC_MIN_SIMILARITY and topic_id in self._topics:
+                scores[topic_id] = max(scores.get(topic_id, 0.0), round(min(similarity, 1.0), 3))
+        best = sorted(scores.items(), key=lambda kv: (-kv[1], kv[0]))[: max(5, len(matches))]
+        return [TopicMatch(topic_id=t, name=self._topics[t].name, score=s) for t, s in best]
+
+    # Semantic ranking
+
+    def _rank(self, query: str, candidates: list[Movie]) -> list[tuple[Movie, float, list[str]]]:
+        if self._index is None or not query.strip():
+            return super()._rank(query, candidates)
+        text, reason = query, "close match for your request"
+        like = _LIKE.search(query.strip())
+        if like:
+            try:
+                seed = self._match_title(like.group(1).strip(" .!?\"'"))
+            except ToolError:  # no single sure title: search with the words instead
+                seed = None
+            if seed and (doc := self._index.document(seed.movie_id)):
+                text, reason = doc, f"similar to {seed.title} ({seed.year})"
+                candidates = [m for m in candidates if m.movie_id != seed.movie_id]
+        similarity = self._index.similar_movies(text)
+        titled = {
+            i for _, _, i in process.extract(
+                query, {m.movie_id: m.title for m in candidates},
+                scorer=fuzz.ratio, processor=utils.default_process, score_cutoff=90, limit=None,
+            )
+        }
+        ranked = [
+            (m, similarity[m.movie_id] + (m.movie_id in titled) + m.rating / 100,
+             ["title match" if m.movie_id in titled else reason])
+            for m in candidates if m.movie_id in similarity
+        ]
+        return sorted(ranked, key=lambda r: r[1], reverse=True)
 
     # Labels, with DTDD on demand
 
@@ -200,6 +254,8 @@ class SqliteBackend(MockBackend):
                 (movie.movie_id, movie.title, movie.year, movie.rating, ",".join(movie.genres), movie.overview),
             )
         self._index_movie(movie)
+        if self._index:
+            self._index.add_movie(movie)
         return movie
 
     def _tmdb_title_match(self, title: str) -> dict | None:
