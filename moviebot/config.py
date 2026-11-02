@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     retrieval_min_similarity: float = 0.0
     memory_max_recommendations: int = 5
     strict_unknown_warnings: bool = False
+    # Browser origins allowed to call `python -m moviebot.server`, e.g. ["http://localhost:5173"]. Empty = none.
+    api_cors_origins: list[str] = []
 
     mock_data_dir: Path = REPO_ROOT / "data" / "mock"
     db_path: Path = REPO_ROOT / "data" / "moviebot.db"  # built by `python -m moviebot.build_db`

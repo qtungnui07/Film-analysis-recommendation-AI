@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-11-02 — HTTP API for the UI
+
+### Added
+
+- `python -m moviebot.server [--db]` serves a FastAPI app over the same agent and backends as the CLI. It has endpoints to list topics, create users, read profiles, edit preferences and chat in sessions. The README lists them, and `/docs` documents every schema.
+- A chat reply carries the turn's search results with their warnings, any pending profile change, and the tool-call trace, so the UI can show badges and confirm buttons without parsing the bot's text.
+- Backends can create users (`create_user`) and list topics (`topics`). `SqliteBackend` saves new users to the database. Neither is in `ToolBackend`: the LLM doesn't use them.
+- `API_CORS_ORIGINS` names the browser origins allowed to call the server. By default none are.
+
+### Changed
+
+- The CLI's `--db` backend setup moved into `make_backend` in `cli.py`, so the CLI and the server share it.
+
+### Verification
+
+```text
+63 passed, 1 deselected
+```
+
 ## 2026-10-29 — Retrieval layer
 
 ### Added

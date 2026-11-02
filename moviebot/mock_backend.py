@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+import uuid
 from pathlib import Path
 from typing import Mapping, Sequence
 
@@ -107,6 +108,15 @@ class MockBackend:
     @property
     def user_ids(self) -> list[str]:
         return list(self._users)
+
+    @property
+    def topics(self) -> list[Topic]:
+        return list(self._topics.values())
+
+    def create_user(self, name: str) -> UserProfile:
+        user_id = uuid.uuid4().hex[:8]
+        self._users[user_id] = {"user_id": user_id, "name": name, "topic_prefs": {}}
+        return self.get_user_profile(user_id)
 
     # ToolBackend
 

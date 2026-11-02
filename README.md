@@ -26,6 +26,31 @@ uv run python -m moviebot.cli --user arachno -v --db   # real database
 - **Demo users:** `arachno` (never spiders, warn on jump scares), `dog_lover` (never a dog dies, warn on blood/gore) and `fresh` (no preferences).
 - **`-v`** prints every tool call.
 
+## Running the API
+
+```
+uv run python -m moviebot.server          # mock data on http://127.0.0.1:8000
+uv run python -m moviebot.server --db     # real database; --host and --port change the address
+```
+
+Interactive docs with every request and response schema are at http://127.0.0.1:8000/docs. [docs/API.md](docs/API.md) is the full guide for the frontend.
+
+| Method | Path | Body | Returns |
+| --- | --- | --- | --- |
+| GET | `/topics` | | Every topic, with its `category` for grouping in the picker |
+| POST | `/users` | `{"name": "Alice"}` | The new user's profile (201) |
+| GET | `/users/{user_id}` | | The profile |
+| PUT | `/users/{user_id}/preferences/{topic_id}` | `{"strictness": "never" \| "warn" \| "fine"}` | The updated profile; `fine` removes the preference |
+| POST | `/sessions` | `{"user_id": "arachno"}` | `{"session_id": ...}` (201) |
+| POST | `/sessions/{session_id}/messages` | `{"text": "a sci-fi movie, no spiders"}` | `reply`, `movies`, `pending_profile_update`, `trace` |
+
+- **`movies`** holds the results of the turn's last search, each with its warnings for the user's topics. Show these as cards with badges.
+- **`pending_profile_update`** is set when the bot has proposed a profile change. Show confirm and cancel buttons that send `"yes"` or `"no"` as the next message.
+- **`trace`** lists every tool call, for a debug panel.
+- **Errors** come back as `{"error", "hint"}`: 404 for an unknown user, topic, movie or session, 400 for other tool errors, and 503 when the LLM is unreachable. An invalid body gets FastAPI's 422.
+- **Chat is slow.** A turn takes as long as the LLM, around a minute on the local model, and other requests wait until it ends. Sessions are kept in memory, so restarting the server ends them.
+- **CORS:** a browser frontend on another origin needs that origin in `.env`, e.g. `API_CORS_ORIGINS=["http://localhost:5173"]`.
+
 ## Setting up the database
 
 The datasets' licences don't allow redistribution, so the data is never committed: each of us downloads it and builds the database locally. Sources, terms and what ends up in the database are described in [data/README.md](data/README.md).
@@ -91,6 +116,7 @@ uv run --extra dev pytest -m live      # one end-to-end chat against the LLM in 
 | --- | --- |
 | [moviebot/contracts.py](moviebot/contracts.py) | The tool contracts every layer builds against, and the rules for turning DTDD labels into warnings |
 | [moviebot/agent.py](moviebot/agent.py), [tools.py](moviebot/tools.py), [prompts.py](moviebot/prompts.py) | The LLM tool-calling loop, tool schemas and safety gate, and the system prompt |
+| [moviebot/server.py](moviebot/server.py) | HTTP API for the UI, over the same agent and backends as the CLI |
 | [moviebot/mock_backend.py](moviebot/mock_backend.py) | Backend over `data/mock/*.json`, used by the tests |
 | [moviebot/db_backend.py](moviebot/db_backend.py) | Backend over `data/moviebot.db`, with semantic search, and DTDD and TMDB on demand |
 | [moviebot/retrieval.py](moviebot/retrieval.py) | Chroma vector index (all-MiniLM-L6-v2, local) for movies and topic phrases |

@@ -231,6 +231,11 @@ def test_profile_edits_persist(db_path):
     assert SqliteBackend(db_path).get_user_profile("animal_lover").topic_ids("warn") == {SPIDERS}
 
 
+def test_created_users_persist(db_path):
+    user_id = SqliteBackend(db_path).create_user("Alice").user_id
+    assert SqliteBackend(db_path).get_user_profile(user_id).name == "Alice"
+
+
 def test_missing_database_says_how_to_build_it(tmp_path):
     with pytest.raises(FileNotFoundError, match="build_db"):
         SqliteBackend(tmp_path / "nope.db")

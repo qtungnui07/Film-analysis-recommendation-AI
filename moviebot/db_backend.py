@@ -129,6 +129,14 @@ class SqliteBackend(MockBackend):
         # Labels start empty and are read per movie when needed: the full table is about a million rows.
         self._setup(topics, movies, {}, users, exclude_unknown=exclude_unknown)
 
+    def create_user(self, name: str) -> UserProfile:
+        profile = super().create_user(name)
+        with self._db:
+            self._db.execute(
+                "INSERT INTO users (user_id, name, topic_prefs) VALUES (?, ?, '{}')", (profile.user_id, name)
+            )
+        return profile
+
     def update_user_preference(
         self,
         user_id: str,

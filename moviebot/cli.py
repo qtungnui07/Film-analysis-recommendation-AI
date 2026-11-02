@@ -31,6 +31,26 @@ def _summarize(output: dict) -> str:
     return json.dumps(output)[:200]
 
 
+def make_backend(settings: Settings, use_db: bool) -> MockBackend:
+    """The backend the CLI and the API server share. Raises FileNotFoundError when --db data is missing."""
+    if not use_db:
+        return MockBackend(settings.mock_data_dir, exclude_unknown=settings.strict_unknown_warnings)
+    from moviebot.retrieval import VectorIndex  # chromadb is slow to import; only --db needs it
+
+    dtdd_key, tmdb_key = settings.dtdd_key.get_secret_value(), settings.tmdb_key.get_secret_value()
+    index = VectorIndex(settings.index_path, min_similarity=settings.retrieval_min_similarity)
+    backend = SqliteBackend(
+        settings.db_path,
+        exclude_unknown=settings.strict_unknown_warnings,
+        dtdd=DtddClient(dtdd_key) if dtdd_key else None,
+        tmdb=TmdbClient(tmdb_key) if tmdb_key else None,
+        index=index,
+    )
+    if not index.movies.count():
+        raise FileNotFoundError(f"{settings.index_path} is empty; build it with: python -m moviebot.build_index")
+    return backend
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Chat with the movie bot.")
     parser.add_argument("--user", default="arachno", help="demo user id: arachno, dog_lover or fresh")
@@ -39,27 +59,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     settings = Settings()
-    if args.db:
-        from moviebot.retrieval import VectorIndex  # chromadb is slow to import; only --db needs it
-
-        dtdd_key, tmdb_key = settings.dtdd_key.get_secret_value(), settings.tmdb_key.get_secret_value()
-        index = VectorIndex(settings.index_path, min_similarity=settings.retrieval_min_similarity)
-        try:
-            backend = SqliteBackend(
-                settings.db_path,
-                exclude_unknown=settings.strict_unknown_warnings,
-                dtdd=DtddClient(dtdd_key) if dtdd_key else None,
-                tmdb=TmdbClient(tmdb_key) if tmdb_key else None,
-                index=index,
-            )
-        except FileNotFoundError as e:
-            print(e, file=sys.stderr)
-            return 2
-        if not index.movies.count():
-            print(f"{settings.index_path} is empty; build it with: python -m moviebot.build_index", file=sys.stderr)
-            return 2
-    else:
-        backend = MockBackend(settings.mock_data_dir, exclude_unknown=settings.strict_unknown_warnings)
+    try:
+        backend = make_backend(settings, args.db)
+    except FileNotFoundError as e:
+        print(e, file=sys.stderr)
+        return 2
     try:
         profile = backend.get_user_profile(args.user)
     except NotFoundError as e:
