@@ -75,7 +75,13 @@ def create_app(
 
     @app.exception_handler(openai.APIConnectionError)
     async def llm_down(request, e: openai.APIConnectionError) -> JSONResponse:
-        return JSONResponse({"error": "can't reach the LLM", "hint": "is the LLM server running?"}, status_code=503)
+        import traceback; traceback.print_exception(e)
+        return JSONResponse({"error": "can't reach the LLM", "hint": repr(e.__cause__)}, status_code=503)
+
+    @app.exception_handler(openai.APIStatusError)
+    async def llm_status(request, e: openai.APIStatusError) -> JSONResponse:
+        print("LLM", e.status_code, e.response.text)
+        return JSONResponse({"error": "LLM rejected the request", "hint": e.response.text[:300]}, status_code=502)
 
     # Handlers are async so every request runs on one thread: SqliteBackend's connection can't change threads.
     # shortcut: a chat turn blocks other requests until it ends; move to threads with a backend lock if several people chat at once.
