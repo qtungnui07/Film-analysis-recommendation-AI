@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-11-09 — DTDD rate limit
+
+### Fixed
+
+- `DtddClient` waits out DTDD's limit of 30 requests a minute and retries. Before, the first 429 turned DTDD off until the server restarted.
+
+### Verification
+
+```text
+67 passed, 1 deselected
+```
+
 ## 2026-11-02 — HTTP API for the UI
 
 ### Added

@@ -7,6 +7,8 @@ reached, and ValueError on a bad response; callers decide whether that is fatal.
 from __future__ import annotations
 
 import json
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -28,13 +30,27 @@ class DtddClient:
     def __init__(self, api_key: str):
         self._headers = {"X-API-KEY": api_key}
 
+    def _get(self, path: str) -> dict:
+        # DTDD allows 30 requests a minute and a movie costs 2, so one search can reach the limit.
+        # Waiting beats failing: a movie that wasn't checked can't be filtered out.
+        for retries_left in (2, 1, 0):
+            try:
+                return _get_json(f"{self.base_url}{path}", self._headers)
+            except urllib.error.HTTPError as e:
+                if e.code != 429 or not retries_left:
+                    raise
+                wait = float(e.headers.get("Retry-After") or 60)
+                if wait > 60:  # past the minute window: the monthly quota is gone
+                    raise
+            time.sleep(wait)
+
     def media(self, imdb_id: str) -> dict | None:
         """DTDD's page for one movie, or None if it has none. About 1.5 MB: every topic with its votes."""
-        found = _get_json(f"{self.base_url}/dddsearch?imdb={urllib.parse.quote(imdb_id)}", self._headers)
+        found = self._get(f"/dddsearch?imdb={urllib.parse.quote(imdb_id)}")
         items = [item for item in found.get("items", []) if item.get("imdbId") == imdb_id]
         if not items:
             return None
-        return _get_json(f"{self.base_url}/media/{items[0]['id']}", self._headers)
+        return self._get(f"/media/{items[0]['id']}")
 
     def votes(self, imdb_id: str) -> dict[int, tuple[int, int]]:
         """(yes, no) votes per DTDD topic id; empty if DTDD has no page for the movie."""
