@@ -38,6 +38,7 @@ All bodies are JSON. All ids are strings except `topic_id`, which is an integer.
 | `PUT /users/{user_id}/preferences/{topic_id}` | `{"strictness": "never"}` | 200, the updated [UserProfile](#userprofile) |
 | `POST /sessions` | `{"user_id": "arachno"}` | 201, `{"session_id": "..."}` |
 | `POST /sessions/{session_id}/messages` | `{"text": "a sci-fi movie please"}` | 200, [ChatReply](#chatreply) |
+| `GET /sessions/{session_id}/progress` | | 200, `{"status": "..."}` |
 
 ### `GET /topics`
 
@@ -94,7 +95,32 @@ Starts a conversation for one user. The bot remembers earlier messages in the sa
 
 `text` must be 1 to 2000 characters. Returns a [ChatReply](#chatreply).
 
-**This call is slow.** It returns when the LLM has finished, which takes about a minute on the local dev model. Show a loading state, don't put a short timeout on the request, and don't send the next message before the reply comes back.
+**This call is slow.** It returns when the LLM has finished, which takes about a minute on the local dev model. Show a loading state, poll [progress](#get-sessionssession_idprogress), don't put a short timeout on the request, and don't send the next message before the reply comes back.
+
+### `GET /sessions/{session_id}/progress`
+
+What the session's current turn is doing. Poll it while `POST .../messages` is outstanding.
+
+```json
+{"status": "Searching for spooky movie"}
+```
+
+`status` is `null` when no turn is running. While the POST is outstanding, `null` means the message is queued or just starting.
+
+| `status` | When |
+| --- | --- |
+| `LLM is writing a response` | Waiting for the LLM |
+| `Looking up the database` | Matching the message against avoid-topics |
+| `Searching for {query}` | `search_movies` |
+| `Getting {user}'s profile` | `get_user_profile` |
+| `Mapping {phrase} to topics` | `map_phrase_to_topics` |
+| `Requesting a warn/never/show for {topic}` | `request_profile_update`; `show` is the `fine` strictness |
+| `Confirming a warn/never/show for {topic}` | `confirm_profile_update` |
+| `Getting {title}'s warnings` | `get_movie_warnings` |
+| `Fetching {title} from DTDD` | Live DTDD lookup, `--db` only |
+| `Fetching {title or IMDb id} from TMDB` | Live TMDB lookup, `--db` only |
+
+Show the text as it is. Tools other than search finish in milliseconds, so polling will rarely catch them.
 
 ## Shapes
 
@@ -212,6 +238,6 @@ Errors from the app have this body:
 
 ## Limits
 
-- **One request at a time.** While a chat message is being answered, every other request waits, including `GET /topics`.
+- **One chat turn at a time.** While a message is being answered, other chat messages and the user and profile calls wait. `GET /topics` and `GET .../progress` don't.
 - **Sessions are in memory.** A server restart ends every conversation. Users and preferences are kept when the server runs with `--db`; on the mock data they are lost too.
 - **No authentication.** Anyone who can reach the server can read or edit any user. Keep it on `127.0.0.1` unless you're running a test with others.

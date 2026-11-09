@@ -3,6 +3,7 @@ import re
 import sqlite3
 import urllib.error
 import zlib
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from chromadb.api.types import EmbeddingFunction
@@ -113,6 +114,26 @@ def db_path(tmp_path):
     db.commit()
     db.close()
     return path
+
+
+def test_live_fetches_report_progress(db_path):
+    seen = []
+    tmdb = FakeTmdb([tmdb_movie(7, "tt7", "New Film", "2024-05-01")])
+    backend = SqliteBackend(db_path, dtdd=FakeDtdd(), tmdb=tmdb)
+    backend.on_progress = seen.append
+    backend.search_movies("animal_lover", "film", limit=10)
+    backend.get_movie_warnings(title="new film")
+    assert "Fetching Unlabelled Film from DTDD" in seen
+    assert "Fetching new film from TMDB" in seen
+    assert "Getting New Film's warnings" in seen
+
+
+def test_backend_built_on_one_thread_works_on_another(db_path):
+    backend = SqliteBackend(db_path)
+    with ThreadPoolExecutor(1) as worker:
+        user = worker.submit(backend.create_user, "Lee").result()
+    stored = sqlite3.connect(db_path).execute("SELECT name FROM users WHERE user_id = ?", (user.user_id,)).fetchone()
+    assert stored == ("Lee",)
 
 
 def test_dtdd_fills_missing_labels_once(db_path):

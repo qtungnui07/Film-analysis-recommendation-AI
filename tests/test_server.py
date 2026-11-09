@@ -45,6 +45,33 @@ def test_chat_returns_the_reply_and_safe_movies_with_warnings(backend):
     assert reply["pending_profile_update"] is None
 
 
+def test_progress_can_be_polled_during_a_turn(backend, monkeypatch):
+    llm = FakeLLM(
+        completion(tool_calls=[call("search_movies", {"query": "spooky movie"})]),
+        completion("Try one of these."),
+    )
+    seen = []
+
+    def polling(fn):
+        def wrapper(*args, **kwargs):
+            seen.append(api.get(f"/sessions/{session_id}/progress").json()["status"])
+            return fn(*args, **kwargs)
+
+        return wrapper
+
+    monkeypatch.setattr(llm.chat.completions, "create", polling(llm.chat.completions.create))
+    monkeypatch.setattr(backend, "search_movies", polling(backend.search_movies))
+
+    # `with` puts every request on one event loop, as under uvicorn, so a blocked loop can't go unnoticed.
+    with TestClient(create_app(backend, lambda dispatcher: Agent(llm, dispatcher, model="fake"))) as api:
+        session_id = api.post("/sessions", json={"user_id": "arachno"}).json()["session_id"]
+        api.post(f"/sessions/{session_id}/messages", json={"text": "Something spooky"}).raise_for_status()
+        assert api.get(f"/sessions/{session_id}/progress").json() == {"status": None}
+        assert api.get("/sessions/nope/progress").status_code == 404
+
+    assert seen == ["LLM is writing a response", "Searching for spooky movie", "LLM is writing a response"]
+
+
 def test_errors_say_what_went_wrong(backend):
     api = client(backend)
     unknown_user = api.post("/sessions", json={"user_id": "nobody"})

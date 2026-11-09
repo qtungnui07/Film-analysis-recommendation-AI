@@ -62,6 +62,8 @@ def _genre_key(genre: str) -> str:
 
 
 class MockBackend:
+    on_progress = staticmethod(lambda status: None)  # replaced by ToolDispatcher.begin_turn
+
     def __init__(self, data_dir: Path, *, exclude_unknown: bool = False):
         """`exclude_unknown=True` also drops movies whose excluded topics have no label."""
 
@@ -203,6 +205,7 @@ class MockBackend:
     ) -> MovieWarnings:
         self._check_topics(topic_ids or ())
         movie = self._find_movie(movie_id, title)
+        self.on_progress(f"Getting {movie.title}'s warnings")
         voted = set(self._labels_for(movie.movie_id))
         return MovieWarnings(
             movie_id=movie.movie_id,

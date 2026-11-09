@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-11-09 — Chat progress
+
+### Added
+
+- `GET /sessions/{session_id}/progress` returns what the current turn is doing, such as `Searching for spooky movie` or `Fetching Alien from DTDD`, and `null` when no turn is running.
+
+### Changed
+
+- The server runs backend calls on one worker thread instead of the event loop. `GET /topics` and the progress call are answered during a chat turn. Other calls still wait.
+
+### Verification
+
+```text
+72 passed, 1 deselected
+```
+
 ## 2026-11-09 — DTDD rate limit
 
 ### Fixed

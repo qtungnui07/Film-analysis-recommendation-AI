@@ -43,6 +43,7 @@ Interactive docs with every request and response schema are at http://127.0.0.1:
 | PUT | `/users/{user_id}/preferences/{topic_id}` | `{"strictness": "never" \| "warn" \| "fine"}` | The updated profile; `fine` removes the preference |
 | POST | `/sessions` | `{"user_id": "arachno"}` | `{"session_id": ...}` (201) |
 | POST | `/sessions/{session_id}/messages` | `{"text": "a sci-fi movie, no spiders"}` | `reply`, `movies`, `pending_profile_update`, `trace` |
+| GET | `/sessions/{session_id}/progress` | | `{"status": ...}`: what the current turn is doing, `null` when idle |
 
 - **`movies`** holds the results of the turn's last search, each with its warnings for the user's topics. Show these as cards with badges.
 - **`pending_profile_update`** is set when the bot has proposed a profile change. Show confirm and cancel buttons that send `"yes"` or `"no"` as the next message.

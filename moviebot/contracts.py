@@ -7,7 +7,7 @@ Changing a signature here is a team decision, not a local refactor.
 
 from __future__ import annotations
 
-from typing import Literal, Mapping, Protocol, Sequence
+from typing import Callable, Literal, Mapping, Protocol, Sequence
 
 from pydantic import BaseModel, Field
 
@@ -164,6 +164,8 @@ class NotFoundError(ToolError):
 
 
 class ToolBackend(Protocol):
+    on_progress: Callable[[str], None]  # told what the backend is doing, for GET /sessions/{id}/progress
+
     def get_topic(self, topic_id: int) -> Topic:
         """Return one topic or raise ``NotFoundError`` for an unknown id."""
         ...

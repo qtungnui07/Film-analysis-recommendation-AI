@@ -4,6 +4,7 @@ import copy
 import json
 from types import SimpleNamespace
 
+import pytest
 from openai.types.chat import ChatCompletion
 
 from conftest import SPIDERS, movies_with
@@ -50,6 +51,28 @@ class FakeLLM:
 
 def make_agent(backend, llm, user_id="arachno", **kwargs) -> Agent:
     return Agent(llm, ToolDispatcher(backend, user_id), model="fake", **kwargs)
+
+
+def test_progress_is_cleared_when_the_llm_fails(backend):
+    agent = make_agent(backend, FakeLLM())  # an empty script raises IndexError
+    with pytest.raises(IndexError):
+        agent.run_turn("hi")
+    assert agent.dispatcher.progress is None
+
+
+def test_each_tool_reports_its_status(backend):
+    dispatcher = ToolDispatcher(backend, "arachno")
+    dispatcher.begin_turn("hi")
+
+    def status(name, args):
+        assert dispatcher.call(name, json.dumps(args)).ok
+        return dispatcher.progress
+
+    assert status("get_user_profile", {}) == "Getting Alex's profile"
+    assert status("map_phrase_to_topics", {"phrase": "eight legs"}) == "Mapping eight legs to topics"
+    assert status("request_profile_update", {"topic_id": SPIDERS, "strictness": "fine"}) == "Requesting a show for spiders"
+    assert status("confirm_profile_update", {"proposal_id": "profile-change-1"}) == "Confirming a show for spiders"
+    assert status("get_movie_warnings", {"movie_id": "tt0099052"}) == "Getting Arachnophobia's warnings"
 
 
 def test_tool_call_then_answer(backend):

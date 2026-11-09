@@ -152,10 +152,15 @@ def _error(name: str, message: str, hint: str | None = None, args: dict | None =
     return ToolResult(name=name, ok=False, args=args, output=output)
 
 
+def _change_status(verb: str, strictness: str, topic: str) -> str:
+    return f"{verb} a {'show' if strictness == 'fine' else strictness} for {topic}"
+
+
 class ToolDispatcher:
     def __init__(self, backend: ToolBackend, user_id: str):
         self.backend = backend
         self.user_id = user_id
+        self.progress: str | None = None  # what this session's turn is doing now
         self._pending_profile_update: dict | None = None
         self._proposal_counter = 0
         self._turn_excluded_topic_ids: set[int] = set()
@@ -197,19 +202,28 @@ class ToolDispatcher:
         phrases such as ``no spiders`` apply to every search in this turn even
         when a small model forgets to call ``map_phrase_to_topics`` first.
         """
+        # The backend is shared by sessions, but turns run one at a time, so it reports to the current one.
+        self.backend.on_progress = self._set_progress
         self._turn_excluded_topic_ids = set()
         lowered = user_text.casefold()
         triggers = ("avoid", "don't want", "do not want", "no ", "afraid", "scared", "sợ", "tránh", "không muốn")
         if any(trigger in lowered for trigger in triggers):
+            self.progress = "Looking up the database"
             matches = self.backend.map_phrase_to_topics(user_text)
             self._turn_excluded_topic_ids = {m.topic_id for m in matches if m.score >= 0.8}
         return set(self._turn_excluded_topic_ids)
 
+    def _set_progress(self, status: str) -> None:
+        self.progress = status
+
     def _get_user_profile(self, args: GetUserProfileArgs) -> dict:
-        return self.backend.get_user_profile(self.user_id).model_dump(mode="json")
+        profile = self.backend.get_user_profile(self.user_id)
+        self.progress = f"Getting {profile.name}'s profile"
+        return profile.model_dump(mode="json")
 
     def _request_profile_update(self, args: RequestProfileUpdateArgs) -> dict:
         topic = self.backend.get_topic(args.topic_id)
+        self.progress = _change_status("Requesting", args.strictness, topic.name)
         self._proposal_counter += 1
         proposal_id = f"profile-change-{self._proposal_counter}"
         self._pending_profile_update = {
@@ -230,6 +244,7 @@ class ToolDispatcher:
             raise ToolError("there is no pending profile change", hint="request a new profile change first")
         if args.proposal_id != pending["proposal_id"]:
             raise ToolError("that profile proposal is no longer pending", hint="request a new profile change")
+        self.progress = _change_status("Confirming", pending["strictness"], pending["topic_name"])
         profile = self.backend.update_user_preference(
             self.user_id, pending["topic_id"], pending["strictness"]
         )
@@ -259,6 +274,7 @@ class ToolDispatcher:
         )
 
     def _map_phrase_to_topics(self, args: MapPhraseArgs) -> dict:
+        self.progress = f"Mapping {args.phrase} to topics"
         matches = self.backend.map_phrase_to_topics(args.phrase)
         output: dict = {"matches": [m.model_dump(mode="json") for m in matches]}
         if not matches:
@@ -266,6 +282,7 @@ class ToolDispatcher:
         return output
 
     def _search_movies(self, args: SearchMoviesArgs) -> dict:
+        self.progress = f"Searching for {args.query}"
         payload = args.model_dump()
         payload["exclude_topic_ids"] = sorted(
             set(payload["exclude_topic_ids"]) | self._turn_excluded_topic_ids

@@ -86,6 +86,12 @@ class Agent:
         )
 
     def run_turn(self, user_text: str) -> TurnResult:
+        try:
+            return self._run_turn(user_text)
+        finally:
+            self.dispatcher.progress = None
+
+    def _run_turn(self, user_text: str) -> TurnResult:
         if self.session_state.recent_movies:
             memory = "; ".join(
                 movie["title"] for movie in self.session_state.recent_movies[: self.memory_max_recommendations]
@@ -194,6 +200,7 @@ class Agent:
 
     def _complete(self, turn: TurnResult, tool_choice: str):
         turn.llm_calls += 1
+        self.dispatcher.progress = "LLM is writing a response"
 
         kwargs = {
             "model": self.model,

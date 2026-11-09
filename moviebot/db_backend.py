@@ -106,7 +106,8 @@ class SqliteBackend(MockBackend):
     ):
         if not Path(db_path).exists():
             raise FileNotFoundError(f"{db_path} not found; build it with: python -m moviebot.build_db")
-        self._db = sqlite3.connect(db_path)
+        # Built on the main thread; the API server then uses it only from its one worker thread.
+        self._db = sqlite3.connect(db_path, check_same_thread=False)
         self._dtdd = dtdd
         self._tmdb = tmdb
         self._index = index
@@ -204,6 +205,7 @@ class SqliteBackend(MockBackend):
         return labels
 
     def _fetch_dtdd(self, movie_id: str) -> None:
+        self.on_progress(f"Fetching {self._movies[movie_id].title} from DTDD")
         try:
             votes = self._dtdd.votes(movie_id)
         except (OSError, ValueError, KeyError) as e:
@@ -237,6 +239,7 @@ class SqliteBackend(MockBackend):
 
     def _from_tmdb(self, movie_id: str | None, title: str | None) -> Movie | None:
         """Look a movie up on TMDB and add it to the catalogue; None when TMDB has no confident match."""
+        self.on_progress(f"Fetching {title or movie_id} from TMDB")
         try:
             hit = self._tmdb.find_by_imdb(movie_id) if movie_id else self._tmdb_title_match(title)
             details = self._tmdb.details(hit["id"]) if hit else None

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import sys
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Sequence
 
 import openai
@@ -58,6 +60,10 @@ class ChatReply(BaseModel):
     trace: list[ToolCall]
 
 
+class Progress(BaseModel):
+    status: str | None  # what the session's current turn is doing; None when no turn is running
+
+
 def create_app(
     backend: MockBackend,
     make_agent: Callable[[ToolDispatcher], Agent],
@@ -83,8 +89,13 @@ def create_app(
         print("LLM", e.status_code, e.response.text)
         return JSONResponse({"error": "LLM rejected the request", "hint": e.response.text[:300]}, status_code=502)
 
-    # Handlers are async so every request runs on one thread: SqliteBackend's connection can't change threads.
-    # shortcut: a chat turn blocks other requests until it ends; move to threads with a backend lock if several people chat at once.
+    # Backend calls share one thread so SqliteBackend's connection is never used twice at once.
+    # They stay off the event loop so progress polls are answered during a chat turn.
+    # shortcut: a chat turn blocks other backend calls until it ends; add a backend lock if several people chat at once.
+    worker = ThreadPoolExecutor(max_workers=1)
+
+    async def on_worker(fn: Callable, *args):
+        return await asyncio.get_running_loop().run_in_executor(worker, fn, *args)
 
     @app.get("/topics")
     async def list_topics() -> list[Topic]:
@@ -92,20 +103,20 @@ def create_app(
 
     @app.post("/users", status_code=201)
     async def create_user(body: NewUser) -> UserProfile:
-        return backend.create_user(body.name)
+        return await on_worker(backend.create_user, body.name)
 
     @app.get("/users/{user_id}")
     async def get_user(user_id: str) -> UserProfile:
-        return backend.get_user_profile(user_id)
+        return await on_worker(backend.get_user_profile, user_id)
 
     @app.put("/users/{user_id}/preferences/{topic_id}")
     async def set_preference(user_id: str, topic_id: int, body: PreferenceUpdate) -> UserProfile:
         # No confirmation step: that guards against the LLM, and this is the user's own click.
-        return backend.update_user_preference(user_id, topic_id, body.strictness)
+        return await on_worker(backend.update_user_preference, user_id, topic_id, body.strictness)
 
     @app.post("/sessions", status_code=201)
     async def create_session(body: NewSession) -> SessionCreated:
-        backend.get_user_profile(body.user_id)  # 404 for an unknown user
+        await on_worker(backend.get_user_profile, body.user_id)  # 404 for an unknown user
         session_id = uuid.uuid4().hex
         sessions[session_id] = make_agent(ToolDispatcher(backend, body.user_id))
         return SessionCreated(session_id=session_id)
@@ -115,7 +126,7 @@ def create_app(
         agent = sessions.get(session_id)
         if agent is None:
             raise NotFoundError(f"no session {session_id!r}", hint="start one with POST /sessions")
-        result = agent.run_turn(body.text)
+        result = await on_worker(agent.run_turn, body.text)
         searches = [r.result for r in result.trace if r.name == "search_movies" and r.result.ok]
         return ChatReply(
             reply=result.reply,
@@ -126,6 +137,13 @@ def create_app(
                 for r in result.trace
             ],
         )
+
+    @app.get("/sessions/{session_id}/progress")
+    async def get_progress(session_id: str) -> Progress:
+        agent = sessions.get(session_id)
+        if agent is None:
+            raise NotFoundError(f"no session {session_id!r}", hint="start one with POST /sessions")
+        return Progress(status=agent.dispatcher.progress)
 
     return app
 
