@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     retrieval_min_similarity: float = 0.0
     memory_max_recommendations: int = 5
     strict_unknown_warnings: bool = False
+    llm_reasoning_effort: str = "none"
     # Browser origins allowed to call `python -m moviebot.server`, e.g. ["http://localhost:5173"]. Empty = none.
     api_cors_origins: list[str] = []
 

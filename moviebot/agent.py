@@ -6,6 +6,7 @@ import json
 import re
 from dataclasses import dataclass, field
 
+import openai
 from openai import OpenAI
 
 from moviebot.config import Settings
@@ -52,6 +53,7 @@ class Agent:
         max_tool_rounds: int = 6,
         memory_max_recommendations: int = 5,
         system_prompt: str = SYSTEM_PROMPT,
+        reasoning_effort: str = "none",
     ):
         self.client = client
         self.dispatcher = dispatcher
@@ -60,6 +62,7 @@ class Agent:
         self.max_tokens = max_tokens
         self.max_tool_rounds = max_tool_rounds
         self.memory_max_recommendations = memory_max_recommendations
+        self.reasoning_effort = reasoning_effort
         self.messages: list[dict] = [{"role": "system", "content": system_prompt}]
         self.session_state = SessionState()
 
@@ -79,6 +82,7 @@ class Agent:
             max_tokens=settings.llm_max_tokens,
             max_tool_rounds=settings.agent_max_tool_rounds,
             memory_max_recommendations=settings.memory_max_recommendations,
+            reasoning_effort=settings.llm_reasoning_effort,
         )
 
     def run_turn(self, user_text: str) -> TurnResult:
@@ -128,8 +132,13 @@ class Agent:
             message = self._complete(turn, tool_choice="auto")
             if not message.tool_calls:
                 return self._finish(turn, message.content)
-            self.messages.append(
-                {
+
+            # Globally preserve whatever assistant payload the provider returned
+            # using standard Pydantic model serialization (works for OpenAI, Groq, DeepSeek, and Gemini)
+            if hasattr(message, "model_dump"):
+                assistant_payload = message.model_dump(exclude_unset=True)
+            else:
+                assistant_payload = {
                     "role": "assistant",
                     "content": message.content or "",
                     "tool_calls": [
@@ -141,9 +150,12 @@ class Agent:
                         for i, call in enumerate(message.tool_calls)
                     ],
                 }
-            )
-            for sent in self.messages[-1]["tool_calls"]:
-                name, raw_arguments = sent["function"]["name"], sent["function"]["arguments"]
+
+            self.messages.append(assistant_payload)
+
+            for sent in self.messages[-1].get("tool_calls", []):
+                func = sent.get("function", {})
+                name, raw_arguments = func.get("name"), func.get("arguments")
                 if name == "confirm_profile_update" and not self._is_explicit_confirmation(user_text):
                     result = self.dispatcher.reject_profile_confirmation()
                 else:
@@ -182,14 +194,32 @@ class Agent:
 
     def _complete(self, turn: TurnResult, tool_choice: str):
         turn.llm_calls += 1
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=self.messages,
-            tools=TOOL_SPECS,
-            tool_choice=tool_choice,
-            temperature=self.temperature,
-            max_tokens=self.max_tokens,
-        )
+
+        kwargs = {
+            "model": self.model,
+            "messages": self.messages,
+            "tools": TOOL_SPECS,
+            "tool_choice": tool_choice,
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+        }
+
+        # Safely attempt reasoning_effort if user explicitly configured one
+        effort = (self.reasoning_effort or "").lower()
+        if effort in ("low", "medium", "high"):
+            kwargs["reasoning_effort"] = effort
+
+        try:
+            response = self.client.chat.completions.create(**kwargs)
+        except openai.BadRequestError as e:
+            # If the current provider rejects reasoning_effort or tool_choice,
+            # retry gracefully without provider-specific parameters
+            if "reasoning_effort" in kwargs:
+                kwargs.pop("reasoning_effort", None)
+                response = self.client.chat.completions.create(**kwargs)
+            else:
+                raise e
+
         return response.choices[0].message
 
     def _finish(self, turn: TurnResult, content: str | None) -> TurnResult:
