@@ -1,5 +1,34 @@
 # Changelog
 
+## 2026-11-11 — TMDB keywords
+
+### Added
+
+- `python -m moviebot.import_tmdb` fills empty overviews and a new `movies.keywords` column from a Kaggle TMDB dump, `data/TMDB_all_movies.csv`, without API calls. It adds the column to existing databases.
+- The fine-tuning notebook also trains on TMDB keywords. `MOVIELENS_TAGS = False` trains on keywords only.
+
+### Verification
+
+```text
+79 passed, 1 deselected
+```
+
+## 2026-11-10 — Recent movies
+
+### Added
+
+- `python -m moviebot.build_db --add-new` adds catalogue movies the database lacks and changes nothing else.
+
+### Changed
+
+- The catalogue takes movies from 2020 on with at least 2,000 IMDb votes, down from 10,000. Older movies still need 10,000.
+
+### Verification
+
+```text
+78 passed, 1 deselected
+```
+
 ## 2026-11-09 — Chat progress
 
 ### Added

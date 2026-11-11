@@ -53,9 +53,10 @@ CREATE TABLE movies (
     rating          REAL NOT NULL,     -- IMDb average; TMDB's vote average for rows added from TMDB
     num_votes       INTEGER,           -- IMDb votes; NULL for rows added from TMDB
     genres          TEXT NOT NULL,     -- comma-separated IMDb genre names
-    overview        TEXT,              -- NULL until fetch_overviews asks TMDB; '' when TMDB has none
+    overview        TEXT,              -- NULL until import_tmdb or fetch_overviews fills it; '' when TMDB has none
     source          TEXT NOT NULL,     -- 'imdb' (built catalogue) or 'tmdb' (added when a user asked for it)
-    dtdd_checked_at TEXT               -- when DTDD was last asked about this movie; NULL = never
+    dtdd_checked_at TEXT,              -- when DTDD was last asked about this movie; NULL = never
+    keywords        TEXT               -- '|'-separated TMDB keywords from import_tmdb; NULL = none
 );
 CREATE TABLE topics (
     topic_id INTEGER PRIMARY KEY,  -- DTDD topic id; 10001 and up for topics DTDD has retired

@@ -1,8 +1,10 @@
 """Build data/moviebot.db from the raw downloads in data/. See data/README.md for where to get them.
 
-    python -m moviebot.build_db          # needs DTDD_KEY, for DTDD's topic ids, names and categories
+    python -m moviebot.build_db            # needs DTDD_KEY, for DTDD's topic ids, names and categories
+    python -m moviebot.build_db --add-new  # add catalogue movies the database lacks, changing nothing else
 
-- Catalogue: IMDb movies and TV movies with at least 10,000 votes, not adult.
+- Catalogue: IMDb movies and TV movies, not adult, with at least 10,000 votes,
+  or 2,000 from 2020 on.
 - Labels: ML-DDD for every movie it covers, also outside the catalogue, so a
   movie added later from TMDB still finds its dataset labels.
 - Topics: the 137 ML-DDD questions, under DTDD's own topic ids.
@@ -26,6 +28,7 @@ from moviebot.sources import DtddClient
 
 RAW_DIR = REPO_ROOT / "data"
 MIN_VOTES = 10_000
+MIN_VOTES_RECENT, RECENT_FROM = 2_000, 2020  # newer movies have had less time to collect votes
 # DTDD has no topic-list endpoint, but every movie's page lists every topic.
 TOPIC_LIST_MOVIE = "tt0099052"
 
@@ -119,6 +122,28 @@ def _topic_rows(questions: list[str], dtdd_topics: list[dict], covers: dict[str,
     ], ids
 
 
+def insert_movies(db: sqlite3.Connection, raw: Path) -> int:
+    """Insert every IMDb movie the catalogue should hold and the database lacks. Returns how many were added."""
+    ratings = {
+        r["tconst"]: (float(r["averageRating"]), int(r["numVotes"]))
+        for r in _tsv_gz(raw / "title.ratings.tsv.gz")
+        if int(r["numVotes"]) >= MIN_VOTES_RECENT
+    }
+    before = db.total_changes
+    db.executemany(
+        "INSERT OR IGNORE INTO movies (movie_id, title, year, rating, num_votes, genres, source) VALUES (?, ?, ?, ?, ?, ?, 'imdb')",
+        (
+            (r["tconst"], r["primaryTitle"], int(r["startYear"]), *ratings[r["tconst"]],
+             "" if r["genres"] == "\\N" else r["genres"])
+            for r in _tsv_gz(raw / "title.basics.tsv.gz")
+            if r["tconst"] in ratings and r["titleType"] in ("movie", "tvMovie")
+            and r["isAdult"] == "0" and r["startYear"] != "\\N"
+            and ratings[r["tconst"]][1] >= (MIN_VOTES_RECENT if int(r["startYear"]) >= RECENT_FROM else MIN_VOTES)
+        ),
+    )
+    return db.total_changes - before
+
+
 def build(raw: Path, out: Path, dtdd_topics: list[dict], covers: dict[str, list[str]] = COVERS) -> dict[str, int]:
     """Write a fresh database to `out` from the raw files in `raw`. Returns row counts."""
     csv.field_size_limit(2**31 - 1)  # ML-DDD's user_ratings column holds whole rating dicts
@@ -128,21 +153,7 @@ def build(raw: Path, out: Path, dtdd_topics: list[dict], covers: dict[str, list[
     db.executescript(SCHEMA)
 
     print("movies: IMDb ratings and titles...", flush=True)
-    ratings = {
-        r["tconst"]: (float(r["averageRating"]), int(r["numVotes"]))
-        for r in _tsv_gz(raw / "title.ratings.tsv.gz")
-        if int(r["numVotes"]) >= MIN_VOTES
-    }
-    db.executemany(
-        "INSERT INTO movies (movie_id, title, year, rating, num_votes, genres, source) VALUES (?, ?, ?, ?, ?, ?, 'imdb')",
-        (
-            (r["tconst"], r["primaryTitle"], int(r["startYear"]), *ratings[r["tconst"]],
-             "" if r["genres"] == "\\N" else r["genres"])
-            for r in _tsv_gz(raw / "title.basics.tsv.gz")
-            if r["tconst"] in ratings and r["titleType"] in ("movie", "tvMovie")
-            and r["isAdult"] == "0" and r["startYear"] != "\\N"
-        ),
-    )
+    insert_movies(db, raw)
     catalogue = {m for (m,) in db.execute("SELECT movie_id FROM movies")}
     imdb_id = {int(r["movieId"]): "tt" + r["imdbId"] for r in _csv(raw / "links.csv")}
 
@@ -203,8 +214,18 @@ def main(argv: list[str] | None = None) -> int:
         "--force", action="store_true",
         help="replace an existing database, losing fetched overviews, on-demand labels and profile edits",
     )
+    parser.add_argument("--add-new", action="store_true", help="add catalogue movies the database lacks, changing nothing else")
     args = parser.parse_args(argv)
     settings = Settings()
+    if args.add_new:
+        if not settings.db_path.exists():
+            print(f"{settings.db_path} not found; build it first with: python -m moviebot.build_db", file=sys.stderr)
+            return 2
+        db = sqlite3.connect(settings.db_path)
+        with db:
+            added = insert_movies(db, RAW_DIR)
+        print(f"added {added:,} movies to {settings.db_path}; fetch their overviews with: python -m moviebot.fetch_overviews --limit {added}")
+        return 0
     if settings.db_path.exists() and not args.force:
         print(f"{settings.db_path} exists; pass --force to rebuild it from scratch", file=sys.stderr)
         return 2

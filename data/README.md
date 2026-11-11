@@ -9,6 +9,7 @@ Put these files directly in `data/`:
 | Files | Where from | Terms |
 | --- | --- | --- |
 | `title.basics.tsv.gz`, `title.ratings.tsv.gz` | [IMDb datasets](https://datasets.imdbws.com/) | Personal and non-commercial use only |
+| `TMDB_all_movies.csv` | A TMDB dump on Kaggle with `imdb_id`, `overview` and `keywords` columns | Check the Kaggle page; the data comes from the TMDB API |
 | `links.csv`, `genome-scores.csv`, `genome-tags.csv` | `ml-25m.zip` from [MovieLens 25M](https://grouplens.org/datasets/movielens/25m/) | Research use, no redistribution, cite (below) |
 | `ml-ddd_sensitivity_table.csv` | Run `python3 ml-ddd/ml-ddd_data_generation.py` in [Navigating-Sensitivity](https://github.com/sdean-group/Navigating-Sensitivity) | Cite (below) |
 
@@ -18,20 +19,21 @@ Then set `DTDD_KEY` and `TMDB_KEY` in `.env` (see `.env.example`).
 
 ```
 python -m moviebot.build_db                    # about 1–2 minutes, about 75 MB
-python -m moviebot.fetch_overviews --limit 200 # plot overviews from TMDB, most-voted first; rerun to continue
+python -m moviebot.import_tmdb                 # overviews and keywords from the Kaggle TMDB dump, no API calls
+python -m moviebot.fetch_overviews --limit 200 # overviews the dump lacks, from the TMDB API; rerun to continue
 python -m moviebot.build_index                 # search index; about 10 minutes the first time, then seconds
 python -m moviebot.cli --db --user arachno -v  # chat against the real data
 ```
 
 Rerun `build_index` after `fetch_overviews`. It embeds only the texts that changed.
 
-`build_db` refuses to overwrite `data/moviebot.db`. `--force` rebuilds it but loses fetched overviews, labels fetched on demand and profile edits.
+`build_db` refuses to overwrite `data/moviebot.db`. `--force` rebuilds it but loses fetched overviews, labels fetched on demand and profile edits. `--add-new` only adds catalogue movies the database lacks, such as after downloading newer IMDb files. Run `fetch_overviews` after it.
 
 ## What's in `moviebot.db`
 
 The schema, with a comment on every column, is in [db_backend.py](../moviebot/db_backend.py).
 
-- **movies**: the catalogue. 12,779 IMDb movies and TV movies with at least 10,000 votes, adult titles excluded. Title, year, rating and genres are IMDb's, unchanged. `overview` stays empty until `fetch_overviews` fills it.
+- **movies**: the catalogue. 17,238 IMDb movies and TV movies with at least 10,000 votes, or 2,000 from 2020 on, adult titles excluded. Title, year, rating and genres are IMDb's, unchanged. `overview` and `keywords` come from TMDB, through `import_tmdb` and then `fetch_overviews` for overviews the dump lacks.
 - **topics**: the 137 ML-DDD questions under DTDD's own topic ids, names and categories. Synonyms come from DTDD's keywords.
 - **labels**: one `yes` / `no` / `unclear` per (movie, topic). The dataset covers 7,327 catalogue movies. The DTDD data stops in 2019 because it comes through MovieLens; newer movies get labels on demand.
 - **genome**: a 1,128-tag relevance vector (atmospheric, dark, feel-good…) for 8,993 catalogue movies. It's for retrieval only, never for warnings: its scores are machine predictions, not votes.

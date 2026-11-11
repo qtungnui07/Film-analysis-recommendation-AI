@@ -6,7 +6,7 @@ from array import array
 
 import pytest
 
-from moviebot.build_db import build
+from moviebot.build_db import build, insert_movies
 
 QUESTIONS = [
     "Does the dog die", "Does an animal die", "Is there dog fighting", "Is there excessive gore",
@@ -45,6 +45,7 @@ def raw(tmp_path):
         ["tconst", "averageRating", "numVotes"],
         ["tt0000001", "8.1", "20000"], ["tt0000002", "7.0", "9999"], ["tt0000003", "6.0", "50000"],
         ["tt0000004", "5.0", "50000"], ["tt0000005", "9.0", "12000"],
+        ["tt0000006", "6.5", "2000"], ["tt0000007", "6.5", "1999"], ["tt0000008", "6.5", "2000"],
     ], tsv=True)
     with gzip.open(tmp_path / "title.basics.tsv.gz", "wt", encoding="utf-8") as f:  # IMDb never quotes
         f.write("tconst\ttitleType\tprimaryTitle\toriginalTitle\tisAdult\tstartYear\tendYear\truntimeMinutes\tgenres\n"
@@ -52,7 +53,10 @@ def raw(tmp_path):
                 "tt0000002\tmovie\tToo Few Votes\tx\t0\t2000\t\\N\t90\tDrama\n"
                 "tt0000003\tmovie\tAdult Film\tx\t1\t2001\t\\N\t90\tAdult\n"
                 "tt0000004\ttvEpisode\tAn Episode\tx\t0\t2002\t\\N\t40\tDrama\n"
-                "tt0000005\ttvMovie\tA TV Movie\tx\t0\t2003\t\\N\t80\t\\N\n")
+                "tt0000005\ttvMovie\tA TV Movie\tx\t0\t2003\t\\N\t80\t\\N\n"
+                "tt0000006\tmovie\tRecent Film\tx\t0\t2020\t\\N\t90\tDrama\n"
+                "tt0000007\tmovie\tRecent, Too Few Votes\tx\t0\t2020\t\\N\t90\tDrama\n"
+                "tt0000008\tmovie\tOlder, Too Few Votes\tx\t0\t2019\t\\N\t90\tDrama\n")
     write(tmp_path / "links.csv", [["movieId", "imdbId", "tmdbId"], ["1", "0000001", "11"], ["2", "0000002", "22"]])
     header = ["work_id", *(f"{k}: {q}" for q in QUESTIONS for k in ("Clear Yes", "Clear No", "Unclear", "No Votes")),
               "n_ratings", "av_rating", "user_ratings"]
@@ -78,6 +82,7 @@ def test_build_from_raw_files(raw):
     assert db.execute("SELECT movie_id, title, year, genres FROM movies ORDER BY 1").fetchall() == [
         ("tt0000001", 'A "Quoted" Film', 1999, "Drama,Sci-Fi"),
         ("tt0000005", "A TV Movie", 2003, ""),
+        ("tt0000006", "Recent Film", 2020, "Drama"),
     ]
     topics = {q: (t, json.loads(c), json.loads(s)) for t, q, c, s in db.execute("SELECT topic_id, question, covers, synonyms FROM topics")}
     assert topics["Is there dog fighting"][0] == 231  # renamed on DTDD
@@ -94,6 +99,20 @@ def test_build_from_raw_files(raw):
         "165": "never", "161": "warn",
     }
     assert counts["catalogue movies with labels"] == 1
+
+
+def test_insert_movies_adds_only_what_is_missing(raw):
+    out = raw / "out.db"
+    build(raw, out, DTDD_TOPICS, covers={})
+    db = sqlite3.connect(out)
+    with db:
+        db.execute("UPDATE movies SET overview = 'fetched', rating = 1.0 WHERE movie_id = 'tt0000001'")
+        db.execute("DELETE FROM movies WHERE movie_id = 'tt0000006'")
+
+    assert insert_movies(db, raw) == 1
+    assert db.execute("SELECT title, overview FROM movies WHERE movie_id = 'tt0000006'").fetchone() == ("Recent Film", None)
+    assert db.execute("SELECT overview, rating FROM movies WHERE movie_id = 'tt0000001'").fetchone() == ("fetched", 1.0)
+    assert insert_movies(db, raw) == 0
 
 
 def test_build_refuses_unmapped_questions(raw):
