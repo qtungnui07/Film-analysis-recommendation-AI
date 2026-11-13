@@ -17,45 +17,35 @@
 # url = "https://download.pytorch.org/whl/cpu"
 # explicit = true
 # ///
-"""Search page for testing the model trained by finetune_search.ipynb.
+"""Search API for the frontend, using the model trained by finetune_search.ipynb.
 
-    uv run notebooks/search_site.py [--model data/minilm-movie-search] [--port 8002]
+    uv run --env-file .env notebooks/search_site.py [--model data/minilm-movie-search] [--port 8002]
 
 `--model` also takes a Hugging Face id, to compare another model on another port.
+Posters come from TMDB (TMDB_KEY in .env) and are cached in data/posters/.
 """
 
 import argparse
-import html
+import os
 import sqlite3
 import sys
+import threading
+import urllib.request
 from pathlib import Path
 
 import numpy as np
 import uvicorn
-from fastapi import FastAPI, Query
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import FileResponse, Response
 
 REPO = Path(__file__).resolve().parent.parent
 DEFAULT_MODEL = str(REPO / "data" / "minilm-movie-search")
 DB_PATH = REPO / "data" / "moviebot.db"
+POSTER_DIR = REPO / "data" / "posters"
+POSTER_URL = "https://image.tmdb.org/t/p/w500"
 TOP_K = 20
 MAX_QUERY = 200
-
-STYLE = """
-:root { color-scheme: light dark; --muted: light-dark(#5b6168, #a9afb6); --line: light-dark(#dfe2e6, #383c42); }
-body { font: 16px/1.5 system-ui, sans-serif; max-width: 44rem; margin: 0 auto; padding: 2rem 1rem; }
-h1 { font-size: 1.25rem; margin: 0 0 1rem; }
-form { display: flex; gap: .5rem; margin-bottom: 1.5rem; }
-input, button { font: inherit; padding: .6rem .8rem; border: 1px solid var(--line); border-radius: .5rem; }
-input { flex: 1; min-width: 0; }
-button { cursor: pointer; }
-ol { list-style: none; margin: 0; padding: 0; }
-li { padding: 1rem 0; border-top: 1px solid var(--line); }
-h2 { font-size: 1.05rem; margin: 0; }
-h2 span, .meta { color: var(--muted); font-weight: 400; }
-.meta { font-size: .875rem; margin: .1rem 0 .4rem; }
-li p:last-child { margin: 0; }
-"""
+NO_POSTER = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2 3"><rect width="2" height="3" fill="#d1d5db"/></svg>'
 
 
 def load_movies(db_path: Path) -> list[dict]:
@@ -81,42 +71,66 @@ def make_search(model, texts: list[str]):
     return search
 
 
-def result_item(movie: dict, score: float) -> str:
-    details = [(movie["genres"] or "").replace(",", ", "), f"IMDb {movie['rating']}" if movie["rating"] else "", f"similarity {score:.2f}"]
-    year = f" <span>{html.escape(str(movie['year']))}</span>" if movie["year"] else ""
-    return (
-        f"<li><h2>{html.escape(movie['title'])}{year}</h2>"
-        f"<p class=meta>{html.escape(' · '.join(d for d in details if d))}</p>"
-        f"<p>{html.escape(movie['overview'] or '')}</p></li>"
-    )
+def make_fetch_poster(tmdb):
+    def fetch_poster(movie_id: str) -> bytes | None:
+        hit = tmdb.find_by_imdb(movie_id)
+        if not (hit and hit.get("poster_path")):
+            return None
+        with urllib.request.urlopen(POSTER_URL + hit["poster_path"], timeout=15) as response:
+            return response.read()
+
+    return fetch_poster
 
 
-def render(query: str, results: list[tuple[dict, float]]) -> str:
-    items = "".join(result_item(movie, score) for movie, score in results)
-    return (
-        f"<!doctype html><html lang=en><meta charset=utf-8>"
-        f"<meta name=viewport content='width=device-width, initial-scale=1'>"
-        f"<title>Movie search</title><style>{STYLE}</style>"
-        f"<h1>Movie search</h1>"
-        f"<form><input type=search name=q aria-label='Search movies' maxlength={MAX_QUERY} autofocus value=\"{html.escape(query)}\">"
-        f"<button>Search</button></form>"
-        f"<ol>{items}</ol></html>"
-    )
-
-
-def create_app(movies: list[dict], search) -> FastAPI:
+def create_app(movies: list[dict], search, fetch_poster, poster_dir: Path = POSTER_DIR) -> FastAPI:
     app = FastAPI()
+    by_id = {m["movie_id"]: m for m in movies}
 
-    @app.get("/", response_class=HTMLResponse)
-    def page(q: str = Query("", max_length=MAX_QUERY)) -> str:
+    def placeholder(cache_control: str = "public, max-age=604800") -> Response:
+        return Response(NO_POSTER, media_type="image/svg+xml", headers={"Cache-Control": cache_control})
+
+    def known(movie_id: str) -> dict:
+        if movie_id not in by_id:  # also keeps arbitrary ids out of poster_dir paths
+            raise HTTPException(404, "movie not found")
+        return by_id[movie_id]
+
+    @app.get("/search")
+    def search_movies(q: str = Query("", max_length=MAX_QUERY)) -> list[dict]:
         query = q.strip()
-        return render(query, [(movies[i], score) for i, score in search(query)] if query else [])
+        return [movies[i] for i, _ in search(query)] if query else []
+
+    @app.get("/movies/{movie_id}")
+    def movie(movie_id: str) -> dict:
+        return known(movie_id)
+
+    @app.get("/posters/{movie_id}")
+    def poster(movie_id: str) -> Response:
+        known(movie_id)
+        path, none = poster_dir / f"{movie_id}.jpg", poster_dir / f"{movie_id}.none"
+        if not path.exists() and not none.exists():
+            if fetch_poster is None:
+                return placeholder("no-store")
+            try:
+                data = fetch_poster(movie_id)
+            except (OSError, ValueError) as e:  # TMDB down or rate-limited: nothing cached, the next request retries
+                print(f"poster {movie_id}: {e}", file=sys.stderr)
+                return placeholder("no-store")
+            poster_dir.mkdir(parents=True, exist_ok=True)
+            if data is None:
+                none.touch()  # TMDB has no poster: don't ask again
+            else:
+                part = path.with_suffix(f".{threading.get_ident()}.part")
+                part.write_bytes(data)
+                part.replace(path)  # atomic, so a parallel request never serves half a file
+        if path.exists():
+            return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=604800"})
+        return placeholder()
 
     return app
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Search page for the fine-tuned model.")
+    parser = argparse.ArgumentParser(description="Search API for the fine-tuned model.")
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--port", type=int, default=8002)
     args = parser.parse_args()
@@ -129,10 +143,18 @@ def main() -> int:
 
     from sentence_transformers import SentenceTransformer  # not installed in the project's test environment
 
+    sys.path.insert(0, str(REPO))  # uv runs this script outside the project env; moviebot.sources is stdlib-only
+    from moviebot.sources import TmdbClient
+
+    key = os.environ.get("TMDB_KEY", "")
+    if not key:
+        print("TMDB_KEY is not set (run with --env-file .env); posters are off", file=sys.stderr)
+
     movies = load_movies(DB_PATH)
     print(f"embedding {len(movies):,} movies...", flush=True)
     search = make_search(SentenceTransformer(args.model), [movie_text(m) for m in movies])
-    uvicorn.run(create_app(movies, search), host="127.0.0.1", port=args.port)
+    app = create_app(movies, search, make_fetch_poster(TmdbClient(key)) if key else None)
+    uvicorn.run(app, host="127.0.0.1", port=args.port)
     return 0
 
 

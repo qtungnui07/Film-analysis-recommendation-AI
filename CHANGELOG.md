@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-11-12 — Search website
+
+### Changed
+
+- The `frontend` submodule is now a search site on the fine-tuned MiniLM model: a poster grid of results and a details page per movie. The chatbot, library and profile pages are gone.
+- `notebooks/search_site.py` is now the JSON API for the frontend (`/search`, `/movies/{id}`, `/posters/{id}`) instead of an HTML page. Run it with `uv run --env-file .env notebooks/search_site.py`.
+
+### Added
+
+- Posters are fetched from TMDB on first view and cached in `data/posters/`. A movie TMDB has no poster for is remembered, so TMDB is not asked again.
+
+### Verification
+
+```text
+84 passed, 1 deselected
+```
+
 ## 2026-11-11 — TMDB keywords
 
 ### Added

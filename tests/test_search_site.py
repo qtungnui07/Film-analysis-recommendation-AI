@@ -12,35 +12,90 @@ site = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(site)
 
 MOVIES = [
-    {"movie_id": "tt1", "title": "<b>Bold</b>", "year": 2001, "rating": 7.5, "genres": "Drama,War", "overview": "Tom & Jerry"},
+    {"movie_id": "tt1", "title": "First", "year": 2001, "rating": 7.5, "genres": "Drama,War", "overview": "Tom & Jerry"},
     {"movie_id": "tt2", "title": "Second", "year": None, "rating": None, "genres": None, "overview": None},
 ]
 
 
-def client(calls=None):
+def client(tmp_path, calls=None, fetch_poster=None):
     def search(query):
         if calls is not None:
             calls.append(query)
         return [(1, 0.9), (0, 0.5)]
 
-    return TestClient(site.create_app(MOVIES, search))
+    return TestClient(site.create_app(MOVIES, search, fetch_poster, tmp_path))
 
 
-def test_results_keep_search_order_and_are_escaped():
-    body = client().get("/", params={"q": '"><script>'}).text
-    assert body.index("Second") < body.index("&lt;b&gt;Bold&lt;/b&gt;")
-    assert "Tom &amp; Jerry" in body
-    assert "<script>" not in body and "<b>Bold" not in body
+def test_search_keeps_rank_order(tmp_path):
+    assert [m["movie_id"] for m in client(tmp_path).get("/search", params={"q": "war"}).json()] == ["tt2", "tt1"]
 
 
-def test_blank_query_does_not_search():
+def test_blank_query_does_not_search(tmp_path):
     calls = []
-    assert client(calls).get("/", params={"q": "   "}).status_code == 200
+    assert client(tmp_path, calls).get("/search", params={"q": "   "}).json() == []
     assert calls == []
 
 
-def test_overlong_query_is_rejected():
-    assert client().get("/", params={"q": "x" * (site.MAX_QUERY + 1)}).status_code == 422
+def test_overlong_query_is_rejected(tmp_path):
+    assert client(tmp_path).get("/search", params={"q": "x" * (site.MAX_QUERY + 1)}).status_code == 422
+
+
+def test_movie_details_and_unknown_movie(tmp_path):
+    c = client(tmp_path)
+    assert c.get("/movies/tt1").json() == MOVIES[0]
+    assert c.get("/movies/tt9").status_code == 404
+
+
+def test_poster_is_fetched_once_then_served_from_disk(tmp_path):
+    calls = []
+
+    def fetch(movie_id):
+        calls.append(movie_id)
+        return b"\xff\xd8jpeg"
+
+    c = client(tmp_path, fetch_poster=fetch)
+    for _ in range(2):
+        r = c.get("/posters/tt1")
+        assert r.content == b"\xff\xd8jpeg" and r.headers["content-type"] == "image/jpeg"
+    assert calls == ["tt1"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["tt1.jpg"]
+
+
+def test_missing_poster_is_remembered(tmp_path):
+    calls = []
+
+    def fetch(movie_id):
+        calls.append(movie_id)
+        return None
+
+    c = client(tmp_path, fetch_poster=fetch)
+    for _ in range(2):
+        assert c.get("/posters/tt1").text == site.NO_POSTER
+    assert calls == ["tt1"]
+
+
+def test_failed_fetch_is_not_cached(tmp_path):
+    calls = []
+
+    def fetch(movie_id):
+        calls.append(movie_id)
+        raise OSError("TMDB down")
+
+    c = client(tmp_path, fetch_poster=fetch)
+    for _ in range(2):
+        r = c.get("/posters/tt1")
+        assert r.text == site.NO_POSTER and r.headers["cache-control"] == "no-store"
+    assert calls == ["tt1", "tt1"]
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_unknown_poster_id_does_not_reach_tmdb(tmp_path):
+    def fetch(movie_id):
+        raise AssertionError("fetched")
+
+    c = client(tmp_path, fetch_poster=fetch)
+    assert c.get("/posters/tt9").status_code == 404
+    assert c.get("/posters/..%2F..%2Fmoviebot").status_code == 404
 
 
 def test_search_ranks_by_similarity_and_keeps_top_k():
