@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-11-13 — Title training
+
+### Added
+
+- `notebooks/finetune_search_titles.ipynb` trains like `finetune_search.ipynb` and adds a (title, movie text) pair for every training movie. It also tests title lookup: each test movie's title is searched across the whole catalogue. The model is saved to `MyDrive/moviebot/minilm-movie-search-titles/`, and the model from `finetune_search.ipynb` is tested alongside it when present.
+
+The current model puts the searched movie first for 29.5% of 1,000 exact titles, against 88.8% for the stock model, because it was trained on tags and keywords only.
+
+### Verification
+
+```text
+84 passed, 1 deselected
+```
+
 ## 2026-11-12 — Search website
 
 ### Changed
