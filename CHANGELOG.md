@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-11-15 — Hybrid RRF
+
+### Added
+
+Implemented BM25 alongside the current MiniLM model in order to recognize exact-title searches better instead of relying on MiniLM's semantic-based search.
+
+### Verification
+
+```text
+84 passed, 1 deselected
+```
+
 ## 2026-11-13 — Title training
 
 ### Added

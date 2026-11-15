@@ -3,6 +3,7 @@
 # dependencies = [
 #     "fastapi>=0.162.0",
 #     "numpy",
+#     "rank-bm25",
 #     "sentence-transformers==6.2.0",
 #     "torch",
 #     "transformers==5.22.2",
@@ -24,6 +25,9 @@
 `--model` also takes a Hugging Face id, to compare another model on another port.
 Posters come from TMDB (TMDB_KEY in .env) and are cached in data/posters/.
 """
+
+import re
+from rank_bm25 import BM25Okapi
 
 import argparse
 import os
@@ -60,12 +64,35 @@ def movie_text(movie: dict) -> str:
     return ". ".join(p for p in [f"{movie['title']} ({movie['year']})", genres, movie["overview"]] if p)
 
 
+def tokenize(text: str) -> list[str]:
+    return re.findall(r"\w+", text.lower())
+
+
 def make_search(model, texts: list[str]):
-    # shortcut: embeds the catalogue on every start, cache the vectors if restarts get annoying.
     vectors = model.encode(texts, batch_size=64, normalize_embeddings=True, show_progress_bar=True)
 
+    print("indexing keywords with BM25...", flush=True)
+    tokenized_corpus = [tokenize(t) for t in texts]
+    bm25 = BM25Okapi(tokenized_corpus)
+
     def search(query: str) -> list[tuple[int, float]]:
-        scores = vectors @ model.encode([query], normalize_embeddings=True, show_progress_bar=False)[0]
+        query_vec = model.encode([query], normalize_embeddings=True, show_progress_bar=False)[0]
+        vector_scores = vectors @ query_vec
+
+        n = len(vectors)
+        k = 60
+        vec_ranks = np.empty(n, dtype=np.float64)
+        vec_ranks[np.argsort(-vector_scores)] = np.arange(1, n + 1)
+        scores = 0.80 / (k + vec_ranks)
+
+        query_tokens = tokenize(query)
+        if query_tokens:
+            bm25_raw = np.array(bm25.get_scores(query_tokens))
+            if bm25_raw.max() > 0:
+                bm25_ranks = np.empty(n, dtype=np.float64)
+                bm25_ranks[np.argsort(-bm25_raw)] = np.arange(1, n + 1)
+                scores += np.where(bm25_raw > 0, 0.20 / (k + bm25_ranks), 0.0)
+
         return [(int(i), float(scores[i])) for i in np.argsort(-scores)[:TOP_K]]
 
     return search
